@@ -104,7 +104,6 @@ def save_user(user_id):
         save_json(USERS_FILE, users)
 
 def load_carts():
-    # Inject dummy carts on first load so the UI matches Image 20
     dummy_carts = [
         {"cart_id": "19d14bb3ea26", "user_id": 7255180685, "items": 1, "price": "30.00", "date": "30/07 07:40"},
         {"cart_id": "d605439e91f0", "user_id": 7255180685, "items": 3, "price": "90.00", "date": "30/07 07:40"}
@@ -208,9 +207,9 @@ async def wallet_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def get_admin_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📊 Stats", callback_data="admin_stats"), InlineKeyboardButton("👥 Users", callback_data="admin_users")],
-        [InlineKeyboardButton("📝 Description", callback_data="admin_descriptions"), InlineKeyboardButton("💰 Prices", callback_data="admin_prices")],
-        [InlineKeyboardButton("🏷 Labels", callback_data="admin_labels"), InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast")],
-        [InlineKeyboardButton("📦 Deliveries", callback_data="admin_deliveries"), InlineKeyboardButton("💳 Payments", callback_data="admin_payments")],
+        [InlineKeyboardButton("➕ Add Stock", callback_data="admin_add_stock"), InlineKeyboardButton("💰 Prices", callback_data="admin_prices")],
+        [InlineKeyboardButton("📝 Description", callback_data="admin_descriptions"), InlineKeyboardButton("🏷 Labels", callback_data="admin_labels")],
+        [InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast"), InlineKeyboardButton("📦 Deliveries", callback_data="admin_deliveries")],
         [InlineKeyboardButton("❌ Close", callback_data="admin_close")]
     ])
 
@@ -249,7 +248,38 @@ async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_
         state_data = admin_states.pop(user_id)
         state = state_data.get("state")
         
-        if state == "WAITING_DESC" and update.message.text:
+        if state == "WAITING_NEW_STOCK" and update.message.text:
+            lines = update.message.text.strip().split('\n')
+            methods = load_methods()
+            added_count = 0
+            failed_lines = []
+            
+            for line in lines:
+                if not line.strip():
+                    continue
+                try:
+                    title_part, rest = line.split('=', 1)
+                    desc_part, price_part = rest.rsplit('-', 1)
+                    
+                    title = title_part.strip()
+                    desc = desc_part.strip()
+                    price = price_part.replace('£', '').strip()
+                    
+                    new_id = str(max([int(m['id']) for m in methods] + [0]) + 1)
+                    methods.append({"id": new_id, "title": title, "desc": desc, "price": price})
+                    added_count += 1
+                except ValueError:
+                    failed_lines.append(line)
+            
+            save_methods(methods)
+            
+            response = f"✅ Successfully added {added_count} new stock items!"
+            if failed_lines:
+                response += "\n\n⚠️ Failed to parse the following lines (Make sure you use Title = Desc - Price):\n" + "\n".join(failed_lines)
+            
+            await update.message.reply_text(response, reply_markup=get_admin_keyboard())
+
+        elif state == "WAITING_DESC" and update.message.text:
             method_id = state_data["method_id"]
             methods = load_methods()
             for m in methods:
@@ -272,6 +302,14 @@ async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_
             save_labels(labels)
             await update.message.reply_text(f"✅ Label updated to '{update.message.text}' successfully!", reply_markup=get_admin_keyboard())
             
+        elif state == "WAITING_METHOD_TITLE" and update.message.text:
+            method_id = state_data["method_id"]
+            methods = load_methods()
+            for m in methods:
+                if m['id'] == method_id: m['title'] = update.message.text.strip()
+            save_methods(methods)
+            await update.message.reply_text("✅ Method Title updated successfully!", reply_markup=get_admin_keyboard())
+
         elif state == "WAITING_BROADCAST":
             users = load_users()
             sent = 0
@@ -286,13 +324,11 @@ async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_
             target_user = state_data["user_id"]
             cart_id = state_data["cart_id"]
             try:
-                # Forward the admin's file/message directly to the buyer
                 await context.bot.copy_message(chat_id=target_user, from_chat_id=update.effective_chat.id, message_id=update.message.message_id)
                 await context.bot.send_message(chat_id=target_user, text=f"✅ Your order #{cart_id} has been delivered above!")
                 
-                # Remove cart from pending
                 carts = load_carts()
-                carts = [c for c in carts if c["cart_id"] != cart_id]
+                carts = [c for c in carts if str(c["cart_id"]) != str(cart_id)]
                 save_carts(carts)
                 
                 await update.message.reply_text("✅ Delivery sent to user successfully and removed from pending queue!", reply_markup=get_admin_keyboard())
@@ -314,7 +350,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
 
     # Admin actions router
-    if data.startswith("admin_") or data.startswith("editdesc_") or data.startswith("editprice_") or data.startswith("editlabel_") or data.startswith("deliver_"):
+    if data.startswith("admin_") or data.startswith("editdesc_") or data.startswith("editprice_") or data.startswith("editlabel_") or data.startswith("editmethodtitle_") or data.startswith("deliver_"):
         if not is_admin_authenticated(user_id):
             await query.answer("Session expired. Please login again via /admin", show_alert=True)
             return
@@ -326,6 +362,21 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif data == "admin_home":
             await query.answer()
             await query.edit_message_text("🛠 <b>Admin Panel</b>\n\nChoose a section:", reply_markup=get_admin_keyboard(), parse_mode="HTML")
+            
+        # --- ADD STOCK ---
+        elif data == "admin_add_stock":
+            admin_states[user_id] = {"state": "WAITING_NEW_STOCK"}
+            await query.answer()
+            text = (
+                "➕ <b>Add New Stock List</b>\n\n"
+                "Please send your stock items in this exact format:\n"
+                "<code>Store Name = Description - Price</code>\n\n"
+                "<b>Example:</b>\n"
+                "<code>Newbalance.co.uk = BIN + meth (£400) - £45</code>\n"
+                "<code>Booking.com = bin + meth(£300) - 45</code>\n\n"
+                "<i>Tip: You can send multiple lines at once to add several items.</i>"
+            )
+            await query.edit_message_text(text, parse_mode="HTML")
         
         # --- DESCRIPTIONS ---
         elif data == "admin_descriptions":
@@ -351,23 +402,35 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer()
             await query.edit_message_text("💰 <b>Please type the new price (numbers only):</b>", parse_mode="HTML")
 
-        # --- LABELS ---
+        # --- LABELS (Menu Names & Method Titles) ---
         elif data == "admin_labels":
             await query.answer()
             labels = load_labels()
+            methods = load_methods()
+            
             keyboard = [
                 [InlineKeyboardButton(f"✏️ 💷 {labels.get('wallet', 'Wallet')}", callback_data="editlabel_wallet")],
                 [InlineKeyboardButton(f"✏️ 🛡️ {labels.get('rules', 'Rules')}", callback_data="editlabel_rules")],
-                [InlineKeyboardButton(f"✏️ ☎️ {labels.get('support', 'Support')} ↗️", callback_data="editlabel_support")],
-                [InlineKeyboardButton(f"✏️ 📄 {labels.get('channel', 'Channel')} ↗️", callback_data="editlabel_channel")],
-                [InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_home")]
+                [InlineKeyboardButton(f"✏️ ☎️ {labels.get('support', 'Support')}", callback_data="editlabel_support")],
+                [InlineKeyboardButton(f"✏️ 📄 {labels.get('channel', 'Channel')}", callback_data="editlabel_channel")]
             ]
-            await query.edit_message_text("🏷 <b>Labels Editor</b>\n\nClick a button below to rename it across the store:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+            for m in methods:
+                keyboard.append([InlineKeyboardButton(f"✏️ 📦 {m['title']}", callback_data=f"editmethodtitle_{m['id']}")])
+                
+            keyboard.append([InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_home")])
+            await query.edit_message_text("🏷 <b>Labels & Titles Editor</b>\n\nClick a button below to rename Menu Items or Method Names:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+            
         elif data.startswith("editlabel_"):
             key = data.split("_")[1]
             admin_states[user_id] = {"state": "WAITING_LABEL", "label_key": key}
             await query.answer()
             await query.edit_message_text(f"🏷 <b>Type the new name for '{key.title()}':</b>", parse_mode="HTML")
+            
+        elif data.startswith("editmethodtitle_"):
+            method_id = data.split("_")[1]
+            admin_states[user_id] = {"state": "WAITING_METHOD_TITLE", "method_id": method_id}
+            await query.answer()
+            await query.edit_message_text(f"🏷 <b>Type the new Title for this method:</b>", parse_mode="HTML")
 
         # --- DELIVERIES ---
         elif data == "admin_deliveries":
@@ -379,7 +442,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             text = f"📦 <b>Pending Deliveries</b> ({len(carts)} carts)\n\n"
             keyboard = []
-            
             for c in carts:
                 text += f"• Cart {c['cart_id']}  User: {c['user_id']}\n{c['items']} item  £{c['price']}  {c['date']}\n"
                 keyboard.append([InlineKeyboardButton(f"📤 Deliver Cart #{c['cart_id']}  ({c['items']} item)", callback_data=f"deliver_{c['cart_id']}_{c['user_id']}")])
