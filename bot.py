@@ -7,7 +7,7 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 from telegram.error import TelegramError
 
 logging.basicConfig(
-    format="%(asctime)s %(name)s %(levelname)s %(message)s", 
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", 
     level=logging.INFO
 )
 
@@ -25,7 +25,7 @@ LTC_ADDRESS = os.getenv("LTC_ADDRESS", "your_ltc_address_here")
 STORE_NAME = os.getenv("STORE_NAME", "Mazza X Gaara's Store")
 DEVELOPER_TAG = os.getenv("DEVELOPER_TAG", "@Kr3ptoV1")
 MANAGER_TAG = os.getenv("MANAGER_TAG", "@mazza4444")
-RULES_TEXT = os.getenv("RULES_TEXT", "1 No spamming\n2 Follow channel rules\n3 All purchases are final")
+RULES_TEXT = os.getenv("RULES_TEXT", "1. No spamming\n2. Follow channel rules\n3. All purchases are final.")
 
 TOPUP_AMOUNTS = [
     (70, 100),
@@ -39,11 +39,19 @@ TOPUP_AMOUNTS = [
 METHODS_FILE = "methods.json"
 DEFAULT_METHODS = [
     {"id": "1", "name": "Argos.com.uk BIN + METH (£1000+ SIKP) £100 •♻️", "price": "100"},
-    {"id": "2", "name": "sportsdirect.com  BIN + METH (£300) £60", "price": "60"},
-    {"id": "3", "name": "Sainsburys.co.uk BIN + METH (û00) £80", "price": "80"}
+    {"id": "2", "name": "sportsdirect.com  BIN + METH (£300) - £60", "price": "60"},
+    {"id": "3", "name": "Sainsburys.co.uk BIN + METH (û00) - £80", "price": "80"}
 ]
 
 authenticated_admins = set()
+
+def make_safe_url(link: str) -> str:
+    """Ensures that user-provided links are valid Telegram URLs to prevent API crashes."""
+    if not link:
+        return "https://telegram.org"
+    if link.startswith("http://") or link.startswith("https://"):
+        return link
+    return f"https://t.me/{link.replace('@', '')}"
 
 def load_methods():
     if not os.path.exists(METHODS_FILE):
@@ -100,27 +108,27 @@ async def send_store_menu(query, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📦 Method", callback_data="method")],
         [
             InlineKeyboardButton("💷 Wallet", callback_data="wallet"),
-            InlineKeyboardButton("☎️ Support ↗️", url=SUPPORT_LINK)
+            InlineKeyboardButton("☎️ Support ↗️", url=make_safe_url(SUPPORT_LINK))
         ],
         [
             InlineKeyboardButton("🛡️ Rules", callback_data="rules_store"),
-            InlineKeyboardButton("📁 Updates Chan ↗️", url=UPDATES_CHANNEL_LINK)
+            InlineKeyboardButton("📁 Updates Chan... ↗️", url=make_safe_url(UPDATES_CHANNEL_LINK))
         ],
         [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu")]
     ]
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def send_wallet_menu(query_or_message, user_id: int):
-    join_date = datetime.now().strftime("%d %m %Y") 
+    join_date = datetime.now().strftime("%d-%m-%Y") 
     
     text = (
         "====================================\n"
         f"💳 <b>ID:</b> {user_id}\n"
-        f"💰 <b>Balance:</b> £0\n"
+        f"💰 <b>Balance:</b> £0.00\n"
         f"📅 <b>Join Date:</b> {join_date}\n"
         "====================================\n\n"
-        "Select a top up amount below:\n"
-        "<i>Minimum top up: £70</i>"
+        "Select a top-up amount below:\n"
+        "<i>Minimum top-up: £70</i>"
     )
     
     keyboard = []
@@ -145,10 +153,10 @@ async def wallet_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await check_membership(user_id, context):
         await send_wallet_menu(update.message, user_id)
     else:
-        await update.message.reply_text("You must join the channel first Send /start to begin")
+        await update.message.reply_text("You must join the channel first. Send /start to begin.")
 
 async def send_payment_methods(query, amount: str):
-    text = f"🔶 <b>£{amount} Top Up</b>\n\nChoose your payment method:"
+    text = f"🔶 <b>£{amount} Top-Up</b>\n\nChoose your payment method:"
     keyboard = [
         [InlineKeyboardButton("₿ BTC", callback_data=f"pay_{amount}_BTC")],
         [InlineKeyboardButton("Ⓞ SOL", callback_data=f"pay_{amount}_SOL")],
@@ -159,25 +167,25 @@ async def send_payment_methods(query, amount: str):
 
 async def admin_login(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("Please provide the password")
+        await update.message.reply_text("Please provide the password.")
         return
     if context.args[0] == ADMIN_PASSWORD:
         authenticated_admins.add(update.effective_user.id)
-        await update.message.reply_text("Admin access granted")
+        await update.message.reply_text("Admin access granted.")
     else:
-        await update.message.reply_text("Incorrect password")
+        await update.message.reply_text("Incorrect password.")
 
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in authenticated_admins:
-        await update.message.reply_text("Unauthorised Please login using /adminlogin password")
+        await update.message.reply_text("Unauthorised. Please login using /adminlogin <password>")
         return
     text = (
         "🛠 <b>Admin Panel</b>\n\n"
         "Use these commands to manage your methods:\n"
-        "<code>/adminlist</code> View all methods\n"
-        "<code>/adminadd Name | Price</code> Add a method\n"
-        "<code>/adminedit ID | New Name | New Price</code> Edit a method\n"
-        "<code>/admindelete ID</code> Delete a method"
+        "<code>/adminlist</code> - View all methods\n"
+        "<code>/adminadd Name | Price</code> - Add a method\n"
+        "<code>/adminedit ID | New Name | New Price</code> - Edit a method\n"
+        "<code>/admindelete ID</code> - Delete a method"
     )
     await update.message.reply_text(text, parse_mode="HTML")
 
@@ -186,7 +194,7 @@ async def admin_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     methods = load_methods()
     if not methods:
-        await update.message.reply_text("No methods found")
+        await update.message.reply_text("No methods found.")
         return
     text = "📦 <b>Current Methods</b>\n\n"
     for m in methods:
@@ -228,7 +236,7 @@ async def admin_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         save_methods(methods)
         await update.message.reply_text(f"✅ Edited Method ID {method_id}")
     else:
-        await update.message.reply_text("❌ Method ID not found")
+        await update.message.reply_text("❌ Method ID not found.")
 
 async def admin_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in authenticated_admins:
@@ -243,7 +251,7 @@ async def admin_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
         save_methods(new_methods)
         await update.message.reply_text(f"✅ Deleted Method ID {method_id}")
     else:
-        await update.message.reply_text("❌ Method ID not found")
+        await update.message.reply_text("❌ Method ID not found.")
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -255,17 +263,24 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer()
             await send_store_menu(query, context)
         else:
-            await query.answer("Please join the channel first")
+            # show_alert=True makes it a center-screen modal popup so it's obvious to the user
+            await query.answer("Please join the channel first to access the store.", show_alert=True)
+            
+            safe_url = make_safe_url(CHANNEL_LINK)
+            
             text = (
                 "⚠️ <b>Access Restricted</b>\n\n"
-                "To access the store menu you must first join our updates channel"
+                "To access the store menu, you must first join our updates channel."
             )
             keyboard = [
-                [InlineKeyboardButton("📢 Join Channel", url=CHANNEL_LINK)],
+                [InlineKeyboardButton("📢 Join Channel", url=safe_url)],
                 [InlineKeyboardButton("✅ I Have Joined", callback_data="access_store")],
                 [InlineKeyboardButton("🔙 Back", callback_data="main_menu")]
             ]
-            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+            try:
+                await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+            except Exception as e:
+                logging.error(f"Failed to update restricted message: {e}")
 
     elif data == "wallet":
         await query.answer()
@@ -296,16 +311,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Please send the equivalent crypto amount to the address below:\n"
             f"<code>{address}</code>\n\n"
             f"<i>(Tap the address to copy it)</i>\n\n"
-            f"After sending please contact support with your transaction hash"
+            f"After sending, please contact support with your transaction hash."
         )
         keyboard = [
-            [InlineKeyboardButton("☎️ Contact Support", url=SUPPORT_LINK)],
+            [InlineKeyboardButton("☎️ Contact Support", url=make_safe_url(SUPPORT_LINK))],
             [InlineKeyboardButton("⬅️ Back to Methods", callback_data=f"topup_{amount}")]
         ]
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
     elif data == "custom_topup":
-        await query.answer("Custom amount feature coming soon", show_alert=True)
+        await query.answer("Custom amount feature coming soon!", show_alert=True)
 
     elif data == "rules_main" or data == "rules_store":
         await query.answer()
@@ -318,9 +333,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         methods = load_methods()
         keyboard = []
         for m in methods:
-            keyboard.append([InlineKeyboardButton(f"{m['name']} £{m['price']}", callback_data=f"buy_{m['id']}")])
+            keyboard.append([InlineKeyboardButton(f"{m['name']} - £{m['price']}", callback_data=f"buy_{m['id']}")])
         keyboard.append([InlineKeyboardButton("🔙 Back to Store", callback_data="access_store")])
-        await query.edit_message_text(f"📦 <b>Available Methods</b>\n\nSelect an option below to purchase", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+        await query.edit_message_text(f"📦 <b>Available Methods</b>\n\nSelect an option below to purchase:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
     elif data.startswith("buy_"):
         await query.answer()
@@ -333,7 +348,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"🛒 <b>Purchase Selection</b>\n\n"
                 f"<b>Item:</b> {method['name']}\n"
                 f"<b>Price:</b> £{method['price']}\n\n"
-                f"Please top up your wallet to proceed with this purchase"
+                f"Please top up your wallet to proceed with this purchase."
             )
             keyboard = [
                 [InlineKeyboardButton("💷 Go to Wallet", callback_data="wallet")],
@@ -347,7 +362,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     if not BOT_TOKEN:
-        raise ValueError("BOT_TOKEN environment variable is not set")
+        raise ValueError("BOT_TOKEN environment variable is not set!")
 
     app = Application.builder().token(BOT_TOKEN).build()
 
@@ -363,7 +378,7 @@ def main():
     
     app.add_handler(CallbackQueryHandler(handle_callback))
 
-    print("Bot is successfully running")
+    print("Bot is successfully running...")
     app.run_polling()
 
 if __name__ == "__main__":
