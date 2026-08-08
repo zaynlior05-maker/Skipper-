@@ -115,12 +115,12 @@ async def send_wallet_menu(query_or_message, user_id: int):
     
     text = (
         "====================================\n"
-        f"💳 **ID:** {user_id}\n"
-        f"💰 **Balance:** £0\n"
-        f"📅 **Join Date:** {join_date}\n"
+        f"💳 <b>ID:</b> {user_id}\n"
+        f"💰 <b>Balance:</b> £0\n"
+        f"📅 <b>Join Date:</b> {join_date}\n"
         "====================================\n\n"
         "Select a top up amount below:\n"
-        "_Minimum top up: £70_"
+        "<i>Minimum top up: £70</i>"
     )
     
     keyboard = []
@@ -136,9 +136,9 @@ async def send_wallet_menu(query_or_message, user_id: int):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     if hasattr(query_or_message, 'edit_message_text'):
-        await query_or_message.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+        await query_or_message.edit_message_text(text, reply_markup=reply_markup, parse_mode="HTML")
     else:
-        await query_or_message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+        await query_or_message.reply_text(text, reply_markup=reply_markup, parse_mode="HTML")
 
 async def wallet_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -148,14 +148,14 @@ async def wallet_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("You must join the channel first Send /start to begin")
 
 async def send_payment_methods(query, amount: str):
-    text = f"🔶 **£{amount} Top Up**\n\nChoose your payment method:"
+    text = f"🔶 <b>£{amount} Top Up</b>\n\nChoose your payment method:"
     keyboard = [
         [InlineKeyboardButton("₿ BTC", callback_data=f"pay_{amount}_BTC")],
         [InlineKeyboardButton("Ⓞ SOL", callback_data=f"pay_{amount}_SOL")],
         [InlineKeyboardButton("Ł LTC", callback_data=f"pay_{amount}_LTC")],
         [InlineKeyboardButton("⬅️ Back", callback_data="wallet")]
     ]
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
 async def admin_login(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
@@ -172,14 +172,14 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Unauthorised Please login using /adminlogin password")
         return
     text = (
-        "🛠 **Admin Panel**\n\n"
+        "🛠 <b>Admin Panel</b>\n\n"
         "Use these commands to manage your methods:\n"
-        "`/adminlist` View all methods\n"
-        "`/adminadd Name | Price` Add a method\n"
-        "`/adminedit ID | New Name | New Price` Edit a method\n"
-        "`/admindelete ID` Delete a method"
+        "<code>/adminlist</code> View all methods\n"
+        "<code>/adminadd Name | Price</code> Add a method\n"
+        "<code>/adminedit ID | New Name | New Price</code> Edit a method\n"
+        "<code>/admindelete ID</code> Delete a method"
     )
-    await update.message.reply_text(text, parse_mode="Markdown")
+    await update.message.reply_text(text, parse_mode="HTML")
 
 async def admin_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in authenticated_admins:
@@ -188,17 +188,17 @@ async def admin_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not methods:
         await update.message.reply_text("No methods found")
         return
-    text = "📦 **Current Methods**\n\n"
+    text = "📦 <b>Current Methods</b>\n\n"
     for m in methods:
-        text += f"**ID:** {m['id']}\n**Name:** {m['name']}\n**Price:** £{m['price']}\n\n"
-    await update.message.reply_text(text, parse_mode="Markdown")
+        text += f"<b>ID:</b> {m['id']}\n<b>Name:</b> {m['name']}\n<b>Price:</b> £{m['price']}\n\n"
+    await update.message.reply_text(text, parse_mode="HTML")
 
 async def admin_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in authenticated_admins:
         return
     args_text = " ".join(context.args)
     if "|" not in args_text:
-        await update.message.reply_text("Format: `/adminadd Name | Price`", parse_mode="Markdown")
+        await update.message.reply_text("Format: <code>/adminadd Name | Price</code>", parse_mode="HTML")
         return
     name, price = args_text.rsplit("|", 1)
     methods = load_methods()
@@ -213,7 +213,7 @@ async def admin_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args_text = " ".join(context.args)
     parts = [p.strip() for p in args_text.split("|")]
     if len(parts) != 3:
-        await update.message.reply_text("Format: `/adminedit ID | New Name | New Price`", parse_mode="Markdown")
+        await update.message.reply_text("Format: <code>/adminedit ID | New Name | New Price</code>", parse_mode="HTML")
         return
     method_id, new_name, new_price = parts
     methods = load_methods()
@@ -234,7 +234,7 @@ async def admin_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in authenticated_admins:
         return
     if not context.args:
-        await update.message.reply_text("Format: `/admindelete ID`", parse_mode="Markdown")
+        await update.message.reply_text("Format: <code>/admindelete ID</code>", parse_mode="HTML")
         return
     method_id = context.args[0].strip()
     methods = load_methods()
@@ -255,17 +255,17 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer()
             await send_store_menu(query, context)
         else:
-            await query.answer("You must join our channel to access the store", show_alert=True)
+            await query.answer("Please join the channel first")
             text = (
-                "⚠️ **Access Restricted**\n\n"
+                "⚠️ <b>Access Restricted</b>\n\n"
                 "To access the store menu you must first join our updates channel"
             )
             keyboard = [
-                [InlineKeyboardButton("📢 Join Channel First", url=CHANNEL_LINK)],
+                [InlineKeyboardButton("📢 Join Channel", url=CHANNEL_LINK)],
                 [InlineKeyboardButton("✅ I Have Joined", callback_data="access_store")],
                 [InlineKeyboardButton("🔙 Back", callback_data="main_menu")]
             ]
-            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
     elif data == "wallet":
         await query.answer()
@@ -290,19 +290,19 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             address = LTC_ADDRESS
 
         text = (
-            f"📥 **Payment Details**\n\n"
+            f"📥 <b>Payment Details</b>\n\n"
             f"Amount: £{amount}\n"
             f"Method: {crypto}\n\n"
             f"Please send the equivalent crypto amount to the address below:\n"
-            f"`{address}`\n\n"
-            f"*(Tap the address to copy it)*\n\n"
+            f"<code>{address}</code>\n\n"
+            f"<i>(Tap the address to copy it)</i>\n\n"
             f"After sending please contact support with your transaction hash"
         )
         keyboard = [
             [InlineKeyboardButton("☎️ Contact Support", url=SUPPORT_LINK)],
             [InlineKeyboardButton("⬅️ Back to Methods", callback_data=f"topup_{amount}")]
         ]
-        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
     elif data == "custom_topup":
         await query.answer("Custom amount feature coming soon", show_alert=True)
@@ -311,7 +311,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
         back_data = "main_menu" if data == "rules_main" else "access_store"
         keyboard = [[InlineKeyboardButton("🔙 Back", callback_data=back_data)]]
-        await query.edit_message_text(f"🛡️ **Rules**\n\n{RULES_TEXT}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        await query.edit_message_text(f"🛡️ <b>Rules</b>\n\n{RULES_TEXT}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
     elif data == "method":
         await query.answer()
@@ -320,7 +320,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for m in methods:
             keyboard.append([InlineKeyboardButton(f"{m['name']} £{m['price']}", callback_data=f"buy_{m['id']}")])
         keyboard.append([InlineKeyboardButton("🔙 Back to Store", callback_data="access_store")])
-        await query.edit_message_text(f"📦 **Available Methods**\n\nSelect an option below to purchase", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        await query.edit_message_text(f"📦 <b>Available Methods</b>\n\nSelect an option below to purchase", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
     elif data.startswith("buy_"):
         await query.answer()
@@ -330,16 +330,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if method:
             text = (
-                f"🛒 **Purchase Selection**\n\n"
-                f"**Item:** {method['name']}\n"
-                f"**Price:** £{method['price']}\n\n"
+                f"🛒 <b>Purchase Selection</b>\n\n"
+                f"<b>Item:</b> {method['name']}\n"
+                f"<b>Price:</b> £{method['price']}\n\n"
                 f"Please top up your wallet to proceed with this purchase"
             )
             keyboard = [
                 [InlineKeyboardButton("💷 Go to Wallet", callback_data="wallet")],
                 [InlineKeyboardButton("🔙 Back to Methods", callback_data="method")]
             ]
-            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
     elif data == "main_menu":
         await query.answer()
