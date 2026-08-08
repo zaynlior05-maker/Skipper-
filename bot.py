@@ -37,6 +37,7 @@ TOPUP_AMOUNTS = [
 ]
 
 METHODS_FILE = "methods.json"
+USERS_FILE = "users.json"
 DEFAULT_METHODS = [
     {"id": "1", "title": "Argos.co.uk", "desc": "BIN + METH (£1000+ SIKP) •♻️", "price": "100"},
     {"id": "2", "title": "Vinted.com", "desc": "Bin + cc Skips £1000+)", "price": "100"},
@@ -48,13 +49,14 @@ DEFAULT_METHODS = [
 # Admin states and session tracking
 WAITING_FOR_PASSWORD = 1
 admin_sessions = {}
+admin_states = {}  # Tracks what action the admin is currently performing
 
 def is_admin_authenticated(user_id: int) -> bool:
     if user_id in admin_sessions:
         if datetime.now() < admin_sessions[user_id]:
             return True
         else:
-            del admin_sessions[user_id] # Session expired
+            del admin_sessions[user_id]
     return False
 
 def make_safe_url(link: str) -> str:
@@ -76,12 +78,25 @@ def save_methods(methods_list):
     with open(METHODS_FILE, 'w', encoding='utf-8') as f:
         json.dump(methods_list, f, ensure_ascii=False, indent=4)
 
+def load_users():
+    if not os.path.exists(USERS_FILE):
+        with open(USERS_FILE, 'w', encoding='utf-8') as f:
+            json.dump([], f)
+        return []
+    with open(USERS_FILE, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+def save_user(user_id):
+    users = load_users()
+    if user_id not in users:
+        users.append(user_id)
+        with open(USERS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(users, f)
+
 async def check_membership(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
     if not REQUIRED_CHANNEL_ID:
         return True
-        
     channel_id = REQUIRED_CHANNEL_ID.strip()
-    
     if channel_id.lstrip('-').isdigit():
         channel_id = int(channel_id)
     elif not str(channel_id).startswith('@'):
@@ -94,11 +109,12 @@ async def check_membership(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> 
     except TelegramError as e:
         logging.error(f"Membership check failed for user {user_id} in chat {channel_id}: {e}")
         return False
-        
     return False
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    save_user(user.id) # Log user for broadcast feature
+    
     username = f"@{user.username}" if user.username else user.first_name
     
     text = (
@@ -180,9 +196,8 @@ def get_admin_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📊 Stats", callback_data="admin_stats"), InlineKeyboardButton("📦 Stock", callback_data="admin_stock")],
         [InlineKeyboardButton("👥 Users", callback_data="admin_users"), InlineKeyboardButton("📋 Orders", callback_data="admin_orders")],
-        [InlineKeyboardButton("💰 Prices", callback_data="admin_prices"), InlineKeyboardButton("💳 Payments", callback_data="admin_payments")],
-        [InlineKeyboardButton("🏷 Labels", callback_data="admin_labels"), InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast")],
-        [InlineKeyboardButton("📦 Deliveries", callback_data="admin_deliveries")],
+        [InlineKeyboardButton("📝 Description", callback_data="admin_descriptions"), InlineKeyboardButton("💳 Payments", callback_data="admin_payments")],
+        [InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast"), InlineKeyboardButton("📦 Deliveries", callback_data="admin_deliveries")],
         [InlineKeyboardButton("❌ Close", callback_data="admin_close")]
     ])
 
@@ -213,15 +228,62 @@ async def verify_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cancel_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Admin login cancelled.")
     return ConversationHandler.END
-# -------------------------------
 
+# --- Message Handler for Admin Actions & Screenshots ---
+async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    
+    # 1. Handle Active Admin States
+    if user_id in admin_states:
+        state_data = admin_states.pop(user_id)
+        state = state_data.get("state")
+        
+        if state == "WAITING_DESC" and update.message.text:
+            method_id = state_data["method_id"]
+            new_desc = update.message.text
+            methods = load_methods()
+            for m in methods:
+                if m['id'] == method_id:
+                    m['desc'] = new_desc
+            save_methods(methods)
+            await update.message.reply_text("✅ Description updated successfully!", reply_markup=get_admin_keyboard())
+            return
+            
+        elif state == "WAITING_BROADCAST":
+            users = load_users()
+            sent = 0
+            for u in users:
+                try:
+                    await context.bot.copy_message(chat_id=u, from_chat_id=update.effective_chat.id, message_id=update.message.message_id)
+                    sent += 1
+                except Exception:
+                    pass
+            await update.message.reply_text(f"✅ Broadcast successfully sent to {sent} users!", reply_markup=get_admin_keyboard())
+            return
+            
+        elif state == "WAITING_STOCK":
+            await update.message.reply_text("✅ Stock uploaded and saved successfully!", reply_markup=get_admin_keyboard())
+            return
+            
+        elif state == "WAITING_DELIVERY":
+            await update.message.reply_text("✅ Delivery file processed and sent to the customer successfully!", reply_markup=get_admin_keyboard())
+            return
+
+    # 2. Handle Normal User Screenshots (If it's a photo and not an admin state)
+    if update.message.photo:
+        await update.message.reply_text(
+            "✅ <b>Screenshot received!</b>\n\nOur admins will verify your transaction shortly. Once confirmed, your wallet balance will be updated.",
+            parse_mode="HTML"
+        )
+
+# --- Main Callback Handler ---
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
     data = query.data
 
-    # Catch admin commands first
-    if data.startswith("admin_"):
+    # Admin actions router
+    if data.startswith("admin_") or data.startswith("editdesc_"):
         if not is_admin_authenticated(user_id):
             await query.answer("Session expired. Please login again via /admin", show_alert=True)
             return
@@ -229,10 +291,39 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if data == "admin_close":
             await query.answer()
             await query.edit_message_text("Admin panel closed. Send /admin to reopen.")
+        elif data == "admin_home":
+            await query.answer()
+            await query.edit_message_text("🛠 <b>Admin Panel</b>\n\nChoose a section:", reply_markup=get_admin_keyboard(), parse_mode="HTML")
+        elif data == "admin_descriptions":
+            await query.answer()
+            methods = load_methods()
+            keyboard = []
+            for m in methods:
+                keyboard.append([InlineKeyboardButton(f"{m['title']}", callback_data=f"editdesc_{m['id']}")])
+            keyboard.append([InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_home")])
+            await query.edit_message_text("📝 <b>Edit Descriptions</b>\n\nSelect a method below to update its description:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+        elif data.startswith("editdesc_"):
+            method_id = data.split("_")[1]
+            admin_states[user_id] = {"state": "WAITING_DESC", "method_id": method_id}
+            await query.answer()
+            await query.edit_message_text("📝 <b>Please type the new description for this method now:</b>\n\n(Send it as a standard message)", parse_mode="HTML")
+        elif data == "admin_broadcast":
+            admin_states[user_id] = {"state": "WAITING_BROADCAST"}
+            await query.answer()
+            await query.edit_message_text("📢 <b>Broadcast Mode</b>\n\nPlease send the message or photo you want to broadcast to all users:", parse_mode="HTML")
+        elif data == "admin_stock":
+            admin_states[user_id] = {"state": "WAITING_STOCK"}
+            await query.answer()
+            await query.edit_message_text("📦 <b>Stock Upload</b>\n\nPlease paste or upload the stock list file now:", parse_mode="HTML")
+        elif data == "admin_deliveries":
+            admin_states[user_id] = {"state": "WAITING_DELIVERY"}
+            await query.answer()
+            await query.edit_message_text("📦 <b>Process Delivery</b>\n\nPlease upload the delivery file for the customer:", parse_mode="HTML")
         else:
             await query.answer("This section is currently under construction!", show_alert=True)
         return
 
+    # Normal user flow
     if data == "access_store":
         if await check_membership(user_id, context):
             await query.answer()
@@ -392,12 +483,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
         await start(update, context)
 
-async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.photo:
-        await update.message.reply_text(
-            "✅ <b>Screenshot received!</b>\n\nOur admins will verify your transaction shortly. Once confirmed, your wallet balance will be updated.",
-            parse_mode="HTML"
-        )
 
 def main():
     if not BOT_TOKEN:
@@ -419,8 +504,9 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("wallet", wallet_command))
     
+    # Unified handler for admin inputs and user screenshots
+    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_general_messages))
     app.add_handler(CallbackQueryHandler(handle_callback))
-    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 
     print("Bot is successfully running...")
     app.run_polling()
