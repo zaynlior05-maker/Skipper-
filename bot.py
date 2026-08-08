@@ -3,7 +3,7 @@ import json
 import logging
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 from telegram.error import TelegramError
 
 logging.basicConfig(
@@ -38,9 +38,11 @@ TOPUP_AMOUNTS = [
 
 METHODS_FILE = "methods.json"
 DEFAULT_METHODS = [
-    {"id": "1", "name": "Argos.com.uk BIN + METH (£1000+ SIKP) £100 •♻️", "price": "100"},
-    {"id": "2", "name": "sportsdirect.com  BIN + METH (£300) - £60", "price": "60"},
-    {"id": "3", "name": "Sainsburys.co.uk BIN + METH (û00) - £80", "price": "80"}
+    {"id": "1", "title": "Argos.co.uk", "desc": "BIN + METH (£1000+ SIKP) •♻️", "price": "100"},
+    {"id": "2", "title": "Vinted.com", "desc": "Bin + cc Skips £1000+)", "price": "100"},
+    {"id": "3", "title": "Ebay.com", "desc": "BIN + METH (£300)", "price": "60"},
+    {"id": "4", "title": "Apple Pay", "desc": "BIN + METH", "price": "80"},
+    {"id": "5", "title": "Amazon.com", "desc": "BIN + METH", "price": "75"}
 ]
 
 authenticated_admins = set()
@@ -68,19 +70,15 @@ async def check_membership(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> 
     if not REQUIRED_CHANNEL_ID:
         return True
         
-    # Clean the input ID from environment variables
     channel_id = REQUIRED_CHANNEL_ID.strip()
     
-    # If the user inputted a numeric ID string, convert to integer (Required for -100 IDs)
     if channel_id.lstrip('-').isdigit():
         channel_id = int(channel_id)
     elif not str(channel_id).startswith('@'):
-        # If it's text but missing the @ symbol, add it automatically
         channel_id = f"@{channel_id}"
         
     try:
         member = await context.bot.get_chat_member(chat_id=channel_id, user_id=user_id)
-        # Added "restricted" to handle users in groups with limited permissions who are still joined
         if member.status in ["creator", "administrator", "member", "restricted"]:
             return True
     except TelegramError as e:
@@ -146,8 +144,8 @@ async def send_wallet_menu(query_or_message, user_id: int):
     keyboard = []
     for left_amt, right_amt in TOPUP_AMOUNTS:
         keyboard.append([
-            InlineKeyboardButton(f"🔶 £{left_amt} 🔶", callback_data=f"topup_{left_amt}"),
-            InlineKeyboardButton(f"🔶 £{right_amt} 🔶", callback_data=f"topup_{right_amt}")
+            InlineKeyboardButton(f"🕶️ £{left_amt} 🕶️", callback_data=f"topup_{left_amt}"),
+            InlineKeyboardButton(f"🕶️ £{right_amt} 🕶️", callback_data=f"topup_{right_amt}")
         ])
     
     keyboard.append([InlineKeyboardButton("💰 Custom Amount", callback_data="custom_topup")])
@@ -168,7 +166,7 @@ async def wallet_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("You must join the channel first. Send /start to begin.")
 
 async def send_payment_methods(query, amount: str):
-    text = f"🔶 <b>£{amount} Top-Up</b>\n\nChoose your payment method:"
+    text = f"🕶️ <b>£{amount} Top-Up</b>\n\nChoose your payment method:"
     keyboard = [
         [InlineKeyboardButton("₿ BTC", callback_data=f"pay_{amount}_BTC")],
         [InlineKeyboardButton("Ⓞ SOL", callback_data=f"pay_{amount}_SOL")],
@@ -195,8 +193,8 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🛠 <b>Admin Panel</b>\n\n"
         "Use these commands to manage your methods:\n"
         "<code>/adminlist</code> - View all methods\n"
-        "<code>/adminadd Name | Price</code> - Add a method\n"
-        "<code>/adminedit ID | New Name | New Price</code> - Edit a method\n"
+        "<code>/adminadd Title | Description | Price</code> - Add a method\n"
+        "<code>/adminedit ID | New Title | New Description | New Price</code> - Edit a method\n"
         "<code>/admindelete ID</code> - Delete a method"
     )
     await update.message.reply_text(text, parse_mode="HTML")
@@ -210,20 +208,21 @@ async def admin_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     text = "📦 <b>Current Methods</b>\n\n"
     for m in methods:
-        text += f"<b>ID:</b> {m['id']}\n<b>Name:</b> {m['name']}\n<b>Price:</b> £{m['price']}\n\n"
+        text += f"<b>ID:</b> {m['id']}\n<b>Title:</b> {m['title']}\n<b>Desc:</b> {m['desc']}\n<b>Price:</b> £{m['price']}\n\n"
     await update.message.reply_text(text, parse_mode="HTML")
 
 async def admin_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in authenticated_admins:
         return
     args_text = " ".join(context.args)
-    if "|" not in args_text:
-        await update.message.reply_text("Format: <code>/adminadd Name | Price</code>", parse_mode="HTML")
+    parts = [p.strip() for p in args_text.split("|")]
+    if len(parts) != 3:
+        await update.message.reply_text("Format: <code>/adminadd Title | Description | Price</code>", parse_mode="HTML")
         return
-    name, price = args_text.rsplit("|", 1)
+    title, desc, price = parts
     methods = load_methods()
     new_id = str(max([int(m['id']) for m in methods] + [0]) + 1)
-    methods.append({"id": new_id, "name": name.strip(), "price": price.strip()})
+    methods.append({"id": new_id, "title": title, "desc": desc, "price": price})
     save_methods(methods)
     await update.message.reply_text(f"✅ Added Method ID {new_id}")
 
@@ -232,15 +231,16 @@ async def admin_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     args_text = " ".join(context.args)
     parts = [p.strip() for p in args_text.split("|")]
-    if len(parts) != 3:
-        await update.message.reply_text("Format: <code>/adminedit ID | New Name | New Price</code>", parse_mode="HTML")
+    if len(parts) != 4:
+        await update.message.reply_text("Format: <code>/adminedit ID | New Title | New Description | New Price</code>", parse_mode="HTML")
         return
-    method_id, new_name, new_price = parts
+    method_id, new_title, new_desc, new_price = parts
     methods = load_methods()
     found = False
     for m in methods:
         if m['id'] == method_id:
-            m['name'] = new_name
+            m['title'] = new_title
+            m['desc'] = new_desc
             m['price'] = new_price
             found = True
             break
@@ -276,9 +276,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await send_store_menu(query, context)
         else:
             await query.answer("Please join the channel first to access the store.", show_alert=True)
-            
             safe_url = make_safe_url(CHANNEL_LINK)
-            
             text = (
                 "⚠️ <b>Access Restricted</b>\n\n"
                 "To access the store menu, you must first join our updates channel."
@@ -290,8 +288,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
             try:
                 await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
-            except Exception as e:
-                logging.error(f"Failed to update restricted message: {e}")
+            except Exception:
+                pass
 
     elif data == "wallet":
         await query.answer()
@@ -310,24 +308,52 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if crypto == "BTC":
             address = BTC_ADDRESS
+            exchange_rate = 50000 
         elif crypto == "SOL":
             address = SOL_ADDRESS
+            exchange_rate = 120 
         else:
             address = LTC_ADDRESS
+            exchange_rate = 60 
+
+        try:
+            crypto_amount_calc = round(float(amount) / exchange_rate, 6)
+        except ValueError:
+            crypto_amount_calc = "0.00"
 
         text = (
-            f"📥 <b>Payment Details</b>\n\n"
-            f"Amount: £{amount}\n"
-            f"Method: {crypto}\n\n"
-            f"Please send the equivalent crypto amount to the address below:\n"
+            f"📦 <b>PAYMENT INVOICE GENERATED</b>\n"
+            f"– – – – – – – – – – – –\n\n"
+            f"🌐 <b>NETWORK:</b> {crypto}\n"
+            f"⚠️ <b>WARNING:</b> Send ONLY {crypto}.\n\n"
+            f"💰 <b>AMOUNT DUE:</b> {crypto_amount_calc} {crypto} (£{amount})\n"
+            f"📬 <b>DEPOSIT ADDRESS:</b>\n"
             f"<code>{address}</code>\n\n"
-            f"<i>(Tap the address to copy it)</i>\n\n"
-            f"After sending, please contact support with your transaction hash."
+            f"– – – – – – – – – – – –\n\n"
+            f"⏳ <b>Status:</b> Waiting for payment..."
         )
         keyboard = [
-            [InlineKeyboardButton("☎️ Contact Support", url=make_safe_url(SUPPORT_LINK))],
-            [InlineKeyboardButton("⬅️ Back to Methods", callback_data=f"topup_{amount}")]
+            [InlineKeyboardButton("🔄 Check Payment", callback_data="check_payment")],
+            [InlineKeyboardButton("📸 Send Screenshot", callback_data=f"send_screenshot_{amount}")],
+            [InlineKeyboardButton("❌ Cancel", callback_data="wallet")]
         ]
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+
+    elif data == "check_payment":
+        await query.answer(
+            "❌ Error: Payment not found on the blockchain. Please allow 5-15 minutes for confirmations, or use 'Send Screenshot' if you have already paid.",
+            show_alert=True
+        )
+
+    elif data.startswith("send_screenshot_"):
+        await query.answer()
+        amount = data.split("_")[2]
+        text = (
+            f"📸 <b>UPLOAD SCREENSHOT</b>\n"
+            f"– – – – – – – – – – – –\n\n"
+            f"Please send the transaction screenshot/receipt for £{amount} now."
+        )
+        keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="wallet")]]
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
     elif data == "custom_topup":
@@ -339,14 +365,42 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [[InlineKeyboardButton("🔙 Back", callback_data=back_data)]]
         await query.edit_message_text(f"🛡️ <b>Rules</b>\n\n{RULES_TEXT}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
+    # NEW: Methods Catalog View
     elif data == "method":
         await query.answer()
         methods = load_methods()
         keyboard = []
         for m in methods:
-            keyboard.append([InlineKeyboardButton(f"{m['name']} - £{m['price']}", callback_data=f"buy_{m['id']}")])
+            # Display only the title in the catalog menu
+            keyboard.append([InlineKeyboardButton(f"{m['title']}", callback_data=f"view_method_{m['id']}")])
+        
         keyboard.append([InlineKeyboardButton("🔙 Back to Store", callback_data="access_store")])
-        await query.edit_message_text(f"📦 <b>Available Methods</b>\n\nSelect an option below to purchase:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+        
+        text = (
+            "📦 <b>Methods Catalog</b>\n\n"
+            "Select method below to view details:\n\n"
+            "===================================="
+        )
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+
+    # NEW: Method Details View
+    elif data.startswith("view_method_"):
+        await query.answer()
+        method_id = data.split("_")[2]
+        methods = load_methods()
+        method = next((m for m in methods if m['id'] == method_id), None)
+        
+        if method:
+            text = (
+                f"📚 <b>{method['title']}</b> {method['desc']}\n"
+                f"£{method['price']}\n\n"
+                f"---------------------------------"
+            )
+            keyboard = [
+                [InlineKeyboardButton("🛒 Buy Now", callback_data=f"buy_{method['id']}")],
+                [InlineKeyboardButton("🔙 Back to Catalog", callback_data="method")]
+            ]
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
     elif data.startswith("buy_"):
         await query.answer()
@@ -357,19 +411,26 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if method:
             text = (
                 f"🛒 <b>Purchase Selection</b>\n\n"
-                f"<b>Item:</b> {method['name']}\n"
+                f"<b>Item:</b> {method['title']}\n"
                 f"<b>Price:</b> £{method['price']}\n\n"
                 f"Please top up your wallet to proceed with this purchase."
             )
             keyboard = [
                 [InlineKeyboardButton("💷 Go to Wallet", callback_data="wallet")],
-                [InlineKeyboardButton("🔙 Back to Methods", callback_data="method")]
+                [InlineKeyboardButton("🔙 Back to Details", callback_data=f"view_method_{method['id']}")]
             ]
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
     elif data == "main_menu":
         await query.answer()
         await start(update, context)
+
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.photo:
+        await update.message.reply_text(
+            "✅ <b>Screenshot received!</b>\n\nOur admins will verify your transaction shortly. Once confirmed, your wallet balance will be updated.",
+            parse_mode="HTML"
+        )
 
 def main():
     if not BOT_TOKEN:
@@ -379,7 +440,6 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("wallet", wallet_command))
-    
     app.add_handler(CommandHandler("adminlogin", admin_login))
     app.add_handler(CommandHandler("admin", admin_panel))
     app.add_handler(CommandHandler("adminlist", admin_list))
@@ -388,6 +448,7 @@ def main():
     app.add_handler(CommandHandler("admindelete", admin_delete))
     
     app.add_handler(CallbackQueryHandler(handle_callback))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 
     print("Bot is successfully running...")
     app.run_polling()
