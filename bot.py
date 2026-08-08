@@ -46,7 +46,6 @@ DEFAULT_METHODS = [
 authenticated_admins = set()
 
 def make_safe_url(link: str) -> str:
-    """Ensures that user-provided links are valid Telegram URLs to prevent API crashes."""
     if not link:
         return "https://telegram.org"
     if link.startswith("http://") or link.startswith("https://"):
@@ -68,13 +67,26 @@ def save_methods(methods_list):
 async def check_membership(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
     if not REQUIRED_CHANNEL_ID:
         return True
+        
+    # Clean the input ID from environment variables
+    channel_id = REQUIRED_CHANNEL_ID.strip()
+    
+    # If the user inputted a numeric ID string, convert to integer (Required for -100 IDs)
+    if channel_id.lstrip('-').isdigit():
+        channel_id = int(channel_id)
+    elif not str(channel_id).startswith('@'):
+        # If it's text but missing the @ symbol, add it automatically
+        channel_id = f"@{channel_id}"
+        
     try:
-        member = await context.bot.get_chat_member(chat_id=REQUIRED_CHANNEL_ID, user_id=user_id)
-        if member.status in ["creator", "administrator", "member"]:
+        member = await context.bot.get_chat_member(chat_id=channel_id, user_id=user_id)
+        # Added "restricted" to handle users in groups with limited permissions who are still joined
+        if member.status in ["creator", "administrator", "member", "restricted"]:
             return True
     except TelegramError as e:
-        logging.error(f"Error verifying channel membership: {e}")
+        logging.error(f"Membership check failed for user {user_id} in chat {channel_id}: {e}")
         return False
+        
     return False
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -263,7 +275,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer()
             await send_store_menu(query, context)
         else:
-            # show_alert=True makes it a center-screen modal popup so it's obvious to the user
             await query.answer("Please join the channel first to access the store.", show_alert=True)
             
             safe_url = make_safe_url(CHANNEL_LINK)
