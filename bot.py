@@ -256,9 +256,9 @@ async def send_payment_methods(query_or_message, amount: str):
         await query_or_message.reply_text(text, reply_markup=markup, parse_mode="HTML")
 
 # --- Native Bot Menu Commands ---
-async def store_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def skippers_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    await log_action(context, update.effective_user, "Used /store command")
+    await log_action(context, update.effective_user, "Used /skippers command")
     if await check_membership(user_id, context):
         await send_methods_menu(update.message, context)
     else:
@@ -341,6 +341,7 @@ async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_
             methods = load_methods()
             added_count = 0
             failed_lines = []
+            
             for line in lines:
                 if not line.strip(): continue
                 try:
@@ -351,6 +352,7 @@ async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_
                     added_count += 1
                 except ValueError:
                     failed_lines.append(line)
+            
             save_methods(methods)
             response = f"✅ Successfully added {added_count} new stock items!"
             if failed_lines:
@@ -703,7 +705,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             balance = get_balance(user_id)
             
             if balance >= price:
-                # Deduct balance & create order
                 deduct_balance(user_id, price)
                 cart_id = str(uuid.uuid4().hex)[:10]
                 carts = load_carts()
@@ -734,7 +735,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def post_init(application: Application):
     await application.bot.set_my_commands([
         BotCommand("start", "🏠 Main menu"),
-        BotCommand("store", "🛒 Browse the store"),
+        BotCommand("skippers", "📦 Browse skippers"),
         BotCommand("wallet", "💵 View wallet & top up"),
         BotCommand("rules", "🛡 Read the rules"),
         BotCommand("support", "☎️ Contact support")
@@ -753,7 +754,7 @@ def main():
     
     app.add_handler(admin_conv_handler)
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("store", store_command))
+    app.add_handler(CommandHandler("skippers", skippers_command))
     app.add_handler(CommandHandler("wallet", wallet_command))
     app.add_handler(CommandHandler("rules", rules_command))
     app.add_handler(CommandHandler("support", support_command))
