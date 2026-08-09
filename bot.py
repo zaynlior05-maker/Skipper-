@@ -55,11 +55,14 @@ USERS_FILE = os.path.join(DATA_DIR, "users.json")
 LABELS_FILE = os.path.join(DATA_DIR, "labels.json")
 CARTS_FILE = os.path.join(DATA_DIR, "carts.json")
 BALANCES_FILE = os.path.join(DATA_DIR, "balances.json")
+SALES_FILE = os.path.join(DATA_DIR, "sales.json")
 
 DEFAULT_METHODS = [
-    {"id": "1", "title": "Argos.co.uk", "desc": "BIN + METH (£1000+ SIKP) •♻️", "price": "100"},
-    {"id": "2", "title": "Vinted.com", "desc": "Bin + cc Skips £1000+)", "price": "100"},
-    {"id": "3", "title": "Ebay.com", "desc": "BIN + METH (£300)", "price": "60"}
+    {"id": "1", "title": "Amazon.com", "desc": "BIN + METH", "price": "75"},
+    {"id": "2", "title": "Apple Pay", "desc": "BIN + METH", "price": "80"},
+    {"id": "3", "title": "Argos.co.uk", "desc": "BIN + METH (£1000+ SIKP) •♻️", "price": "100"},
+    {"id": "4", "title": "Ebay.com", "desc": "BIN + METH (£300)", "price": "60"},
+    {"id": "5", "title": "Vinted.com", "desc": "Bin + cc Skips £1000+)", "price": "100"}
 ]
 
 DEFAULT_LABELS = {
@@ -117,18 +120,61 @@ def save_json(file_path, data):
     with open(file_path, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
 
-def load_methods(): return load_json(METHODS_FILE, DEFAULT_METHODS)
-def save_methods(data): save_json(METHODS_FILE, data)
+def load_methods():
+    methods = load_json(METHODS_FILE, DEFAULT_METHODS)
+    # Alphabetical A-Z sorting
+    methods.sort(key=lambda x: str(x.get('title', '')).lower())
+    return methods
+
+def save_methods(data):
+    # Sort before saving
+    data.sort(key=lambda x: str(x.get('title', '')).lower())
+    save_json(METHODS_FILE, data)
+
 def load_labels(): return load_json(LABELS_FILE, DEFAULT_LABELS)
 def save_labels(data): save_json(LABELS_FILE, data)
+
 def load_users(): return load_json(USERS_FILE, [])
-def save_user(user_id):
+
+def get_user_list():
+    raw_users = load_users()
+    users_list = []
+    for u in raw_users:
+        if isinstance(u, dict):
+            users_list.append(u)
+        else:
+            users_list.append({"id": u, "username": f"User {u}", "join_date": "Legacy User"})
+    return users_list
+
+def save_user(user):
     users = load_users()
-    if user_id not in users:
-        users.append(user_id)
+    user_id = user.id
+    username = f"@{user.username}" if user.username else user.first_name
+    
+    # Check if user exists
+    exists = False
+    for u in users:
+        if isinstance(u, dict) and u.get("id") == user_id:
+            exists = True
+            break
+        elif isinstance(u, int) and u == user_id:
+            exists = True
+            break
+            
+    if not exists:
+        join_date = datetime.now().strftime("%d/%m/%Y %H:%M")
+        users.append({
+            "id": user_id,
+            "username": username,
+            "join_date": join_date
+        })
         save_json(USERS_FILE, users)
+
 def load_carts(): return load_json(CARTS_FILE, [])
 def save_carts(data): save_json(CARTS_FILE, data)
+
+def load_sales(): return load_json(SALES_FILE, [])
+def save_sales(data): save_json(SALES_FILE, data)
 
 # --- Balance Management ---
 def load_balances(): return load_json(BALANCES_FILE, {})
@@ -136,10 +182,12 @@ def save_balances(data): save_json(BALANCES_FILE, data)
 def get_balance(user_id: int) -> float:
     bals = load_balances()
     return float(bals.get(str(user_id), 0.0))
+
 def add_balance(user_id: int, amount: float):
     bals = load_balances()
     bals[str(user_id)] = bals.get(str(user_id), 0.0) + float(amount)
     save_balances(bals)
+
 def deduct_balance(user_id: int, amount: float) -> bool:
     bals = load_balances()
     current = float(bals.get(str(user_id), 0.0))
@@ -167,7 +215,7 @@ async def check_membership(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> 
 # --- Core Bot Menus & Commands ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    save_user(user.id)
+    save_user(user)
     await log_action(context, user, "Started the bot (/start)")
     
     is_member = await check_membership(user.id, context)
@@ -272,6 +320,7 @@ async def send_payment_methods(query_or_message, amount: str):
 # --- Native Bot Menu Commands ---
 async def skippers_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    save_user(update.effective_user)
     await log_action(context, update.effective_user, "Used /skippers command")
     if await check_membership(user_id, context):
         await send_methods_menu(update.message, context)
@@ -280,6 +329,7 @@ async def skippers_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def wallet_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    save_user(update.effective_user)
     await log_action(context, update.effective_user, "Used /wallet command")
     if await check_membership(user_id, context):
         await send_wallet_menu(update.message, user_id)
@@ -288,6 +338,7 @@ async def wallet_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def rules_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    save_user(update.effective_user)
     await log_action(context, update.effective_user, "Used /rules command")
     if await check_membership(user_id, context):
         await update.message.reply_text(f"🛡️ <b>Rules</b>\n\n{RULES_TEXT}", parse_mode="HTML")
@@ -295,6 +346,7 @@ async def rules_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("You must join the channel first. Send /start to begin.")
 
 async def support_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    save_user(update.effective_user)
     await log_action(context, update.effective_user, "Used /support command")
     await update.message.reply_text(f"☎️ <b>Contact Support:</b>\n{make_safe_url(SUPPORT_LINK)}", parse_mode="HTML")
 
@@ -462,8 +514,9 @@ async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_
             users = load_users()
             sent = 0
             for u in users:
+                u_id = u.get("id") if isinstance(u, dict) else u
                 try:
-                    await context.bot.copy_message(chat_id=u, from_chat_id=update.effective_chat.id, message_id=update.message.message_id)
+                    await context.bot.copy_message(chat_id=u_id, from_chat_id=update.effective_chat.id, message_id=update.message.message_id)
                     sent += 1
                 except Exception: pass
             await update.message.reply_text(f"✅ Broadcast successfully sent to {sent} users!", reply_markup=get_admin_keyboard())
@@ -479,12 +532,18 @@ async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_
                 carts = [c for c in carts if str(c["cart_id"]) != str(cart_id)]
                 save_carts(carts)
                 
+                # Mark status delivered in sales history
+                sales = load_sales()
+                for s in sales:
+                    if str(s.get("cart_id")) == str(cart_id):
+                        s["status"] = "delivered"
+                save_sales(sales)
+                
                 await update.message.reply_text("✅ Delivery sent to user successfully and removed from pending queue!", reply_markup=get_admin_keyboard())
             except Exception as e:
                 await update.message.reply_text(f"❌ Failed to send delivery to user.\nError: {e}", reply_markup=get_admin_keyboard())
         return
 
-    # Handle User Screenshot Receipts
     if update.message.photo:
         user_state = user_states.get(user_id, {})
         amount_expected = user_state.get("amount", "Unknown") if user_state.get("state") == "WAITING_FOR_SCREENSHOT" else "Unknown"
@@ -578,7 +637,56 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif data == "admin_home":
             await query.answer()
             await query.edit_message_text("🛠 <b>Admin Panel</b>\n\nChoose a section:", reply_markup=get_admin_keyboard(), parse_mode="HTML")
+
+        # --- STATS DASHBOARD ---
+        elif data == "admin_stats":
+            await query.answer()
+            users_count = len(get_user_list())
+            live_stock = len(load_methods())
+            carts = load_carts()
+            sales = load_sales()
             
+            sold_items_count = len([s for s in sales if s.get("status") == "delivered"])
+            total_orders_count = len(sales)
+            pending_delivery_count = len(carts)
+            
+            total_revenue = sum(float(s.get("price", 0)) for s in sales if s.get("status") == "delivered")
+            
+            # Count user states waiting for screenshot or active deposit
+            pending_topups_count = len([uid for uid, st in user_states.items() if st.get("state") in ["WAITING_FOR_SCREENSHOT", "WAITING_CUSTOM_AMOUNT"]])
+
+            stats_text = (
+                "📊 <b>Stats</b>\n\n"
+                f"👤 Total users:      <b>{users_count}</b>\n"
+                f"🚫 Banned users:     <b>0</b>\n"
+                f"📦 Stock (live):     <b>{live_stock}</b>\n"
+                f"✅ Sold items:       <b>{sold_items_count}</b>\n"
+                f"🛒 Total orders:     <b>{total_orders_count}</b>\n"
+                f"📦 Pending delivery: <b>{pending_delivery_count}</b>\n"
+                f"💰 Total revenue:    <b>£{total_revenue:.2f}</b>\n"
+                f"⏳ Pending topups:   <b>{pending_topups_count}</b>"
+            )
+            keyboard = [[InlineKeyboardButton("⬅️ Admin Menu", callback_data="admin_home")]]
+            await query.edit_message_text(stats_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+
+        # --- USERS LIST ---
+        elif data == "admin_users":
+            await query.answer()
+            users_list = get_user_list()
+            text = f"👥 <b>Total Users ({len(users_list)})</b>\n\n"
+            
+            for index, u in enumerate(users_list, start=1):
+                u_id = u.get("id")
+                u_name = safe_html(u.get("username", "Unknown"))
+                j_date = u.get("join_date", "Unknown")
+                text += f"{index}. {u_name} (ID: <code>{u_id}</code>)\n   📅 <b>Started:</b> {j_date}\n\n"
+                if len(text) > 3500:  # Telegram message character limit protection
+                    text += "<i>...and more users</i>"
+                    break
+                    
+            keyboard = [[InlineKeyboardButton("⬅️ Admin Menu", callback_data="admin_home")]]
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+
         elif data == "admin_add_stock":
             admin_states[user_id] = {"state": "WAITING_NEW_STOCK"}
             await query.answer()
@@ -840,7 +948,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         try:
-            # Bullet-proof price string cleaning to prevent python crashes
             clean_price_str = str(method['price']).replace('£', '').replace(',', '').strip()
             price = float(clean_price_str)
         except ValueError:
@@ -853,6 +960,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if balance >= price:
             deduct_balance(user_id, price)
             cart_id = str(uuid.uuid4().hex)[:10]
+            date_str = datetime.now().strftime("%d/%m %H:%M")
+            
+            # Save to active carts
             carts = load_carts()
             carts.append({
                 "cart_id": cart_id,
@@ -860,9 +970,21 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "items": 1,
                 "title": method['title'],
                 "price": str(price),
-                "date": datetime.now().strftime("%d/%m %H:%M")
+                "date": date_str
             })
             save_carts(carts)
+            
+            # Record sale tracking
+            sales = load_sales()
+            sales.append({
+                "cart_id": cart_id,
+                "user_id": user_id,
+                "title": method['title'],
+                "price": str(price),
+                "status": "pending",
+                "date": date_str
+            })
+            save_sales(sales)
             
             await log_action(context, user, f"✅ SUCCESSFULLY PURCHASED '{method['title']}'! Please deliver order now.")
             
