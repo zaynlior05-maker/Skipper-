@@ -1,8 +1,9 @@
 import os
 import json
 import logging
+import uuid
 from datetime import datetime, timedelta
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes, ConversationHandler
 from telegram.error import TelegramError
 
@@ -43,13 +44,12 @@ METHODS_FILE = "methods.json"
 USERS_FILE = "users.json"
 LABELS_FILE = "labels.json"
 CARTS_FILE = "carts.json"
+BALANCES_FILE = "balances.json"
 
 DEFAULT_METHODS = [
     {"id": "1", "title": "Argos.co.uk", "desc": "BIN + METH (£1000+ SIKP) •♻️", "price": "100"},
     {"id": "2", "title": "Vinted.com", "desc": "Bin + cc Skips £1000+)", "price": "100"},
-    {"id": "3", "title": "Ebay.com", "desc": "BIN + METH (£300)", "price": "60"},
-    {"id": "4", "title": "Apple Pay", "desc": "BIN + METH", "price": "80"},
-    {"id": "5", "title": "Amazon.com", "desc": "BIN + METH", "price": "75"}
+    {"id": "3", "title": "Ebay.com", "desc": "BIN + METH (£300)", "price": "60"}
 ]
 
 DEFAULT_LABELS = {
@@ -67,7 +67,7 @@ admin_states = {}
 user_states = {}
 
 async def log_action(context: ContextTypes.DEFAULT_TYPE, user, action: str):
-    """Sends a live log of user activity to the specified log group (Format preserved)."""
+    """Sends a live log of user activity to the specified log group."""
     if not LOG_GROUP_ID:
         return
     username = f"@{user.username}" if user.username else user.first_name
@@ -116,6 +116,25 @@ def save_user(user_id):
 def load_carts(): return load_json(CARTS_FILE, [])
 def save_carts(data): save_json(CARTS_FILE, data)
 
+# --- Balance Management ---
+def load_balances(): return load_json(BALANCES_FILE, {})
+def save_balances(data): save_json(BALANCES_FILE, data)
+def get_balance(user_id: int) -> float:
+    bals = load_balances()
+    return float(bals.get(str(user_id), 0.0))
+def add_balance(user_id: int, amount: float):
+    bals = load_balances()
+    bals[str(user_id)] = bals.get(str(user_id), 0.0) + float(amount)
+    save_balances(bals)
+def deduct_balance(user_id: int, amount: float) -> bool:
+    bals = load_balances()
+    current = float(bals.get(str(user_id), 0.0))
+    if current >= float(amount):
+        bals[str(user_id)] = current - float(amount)
+        save_balances(bals)
+        return True
+    return False
+
 # --- Membership Check ---
 async def check_membership(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
     if not REQUIRED_CHANNEL_ID: return True
@@ -131,7 +150,7 @@ async def check_membership(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> 
         return False
     return False
 
-# --- Core Bot Menus ---
+# --- Core Bot Menus & Commands ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     save_user(user.id)
@@ -185,12 +204,24 @@ async def send_store_menu(query_or_message, context: ContextTypes.DEFAULT_TYPE):
     else:
         await query_or_message.reply_text(text, reply_markup=markup)
 
+async def send_methods_menu(query_or_message, context: ContextTypes.DEFAULT_TYPE):
+    methods = load_methods()
+    keyboard = [[InlineKeyboardButton(f"{m['title']}", callback_data=f"view_method_{m['id']}")] for m in methods]
+    keyboard.append([InlineKeyboardButton("🔙 Back to Store", callback_data="access_store")])
+    text = "📦 <b>Methods Catalog</b>\n\nSelect method below to view details:\n\n===================================="
+    markup = InlineKeyboardMarkup(keyboard)
+    if hasattr(query_or_message, 'edit_message_text'):
+        await query_or_message.edit_message_text(text, reply_markup=markup, parse_mode="HTML")
+    else:
+        await query_or_message.reply_text(text, reply_markup=markup, parse_mode="HTML")
+
 async def send_wallet_menu(query_or_message, user_id: int):
     join_date = datetime.now().strftime("%d-%m-%Y") 
+    balance = get_balance(user_id)
     text = (
         "====================================\n"
         f"💳 <b>ID:</b> {user_id}\n"
-        f"💰 <b>Balance:</b> £0.00\n"
+        f"💰 <b>Balance:</b> £{balance:.2f}\n"
         f"📅 <b>Join Date:</b> {join_date}\n"
         "====================================\n\n"
         "Select a top-up amount below:\n"
@@ -224,6 +255,15 @@ async def send_payment_methods(query_or_message, amount: str):
     else:
         await query_or_message.reply_text(text, reply_markup=markup, parse_mode="HTML")
 
+# --- Native Bot Menu Commands ---
+async def store_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    await log_action(context, update.effective_user, "Used /store command")
+    if await check_membership(user_id, context):
+        await send_methods_menu(update.message, context)
+    else:
+        await update.message.reply_text("You must join the channel first. Send /start to begin.")
+
 async def wallet_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     await log_action(context, update.effective_user, "Used /wallet command")
@@ -231,6 +271,18 @@ async def wallet_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_wallet_menu(update.message, user_id)
     else:
         await update.message.reply_text("You must join the channel first. Send /start to begin.")
+
+async def rules_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    await log_action(context, update.effective_user, "Used /rules command")
+    if await check_membership(user_id, context):
+        await update.message.reply_text(f"🛡️ <b>Rules</b>\n\n{RULES_TEXT}", parse_mode="HTML")
+    else:
+        await update.message.reply_text("You must join the channel first. Send /start to begin.")
+
+async def support_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await log_action(context, update.effective_user, "Used /support command")
+    await update.message.reply_text(f"☎️ <b>Contact Support:</b>\n{make_safe_url(SUPPORT_LINK)}", parse_mode="HTML")
 
 # --- Admin Panel ---
 def get_admin_keyboard():
@@ -268,7 +320,6 @@ async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_
     user_id = update.effective_user.id
     user = update.effective_user
     
-    # 1. Custom Amount Input Check
     if user_id in user_states:
         state = user_states.get(user_id).get("state")
         if state == "WAITING_CUSTOM_AMOUNT" and update.message.text:
@@ -281,7 +332,6 @@ async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_
                 await update.message.reply_text("❌ Invalid amount. Please enter numbers only (e.g., 50 or 50.50).")
             return
 
-    # 2. Admin States Check
     if user_id in admin_states:
         state_data = admin_states.pop(user_id)
         state = state_data.get("state")
@@ -291,7 +341,6 @@ async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_
             methods = load_methods()
             added_count = 0
             failed_lines = []
-            
             for line in lines:
                 if not line.strip(): continue
                 try:
@@ -302,7 +351,6 @@ async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_
                     added_count += 1
                 except ValueError:
                     failed_lines.append(line)
-            
             save_methods(methods)
             response = f"✅ Successfully added {added_count} new stock items!"
             if failed_lines:
@@ -362,7 +410,7 @@ async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_
                 await update.message.reply_text(f"❌ Failed to send delivery to user.\nError: {e}", reply_markup=get_admin_keyboard())
         return
 
-    # 3. Handle User Screenshot Receipts
+    # Handle User Screenshot Receipts
     if update.message.photo:
         user_state = user_states.get(user_id, {})
         amount_expected = user_state.get("amount", "Unknown") if user_state.get("state") == "WAITING_FOR_SCREENSHOT" else "Unknown"
@@ -385,7 +433,6 @@ async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_
                 f"⚠️ Action required: Verify and Accept/Reject."
             )
             
-            # Inline Keyboard exactly as requested in Image 24
             keyboard = [
                 [InlineKeyboardButton(f"✅ Approve £{amount_expected}", callback_data=f"approve_{user.id}_{amount_expected}")],
                 [InlineKeyboardButton("❌ Reject Payment", callback_data=f"reject_{user.id}")]
@@ -413,11 +460,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = query.from_user
     data = query.data
 
-    # Log Group Admin Actions (Approve/Reject Screenshots)
+    # Log Group Admin Actions (Approve/Reject)
     if data.startswith("approve_"):
         parts = data.split("_")
         target_user = parts[1]
         amount = parts[2]
+        
+        add_balance(target_user, amount)
         
         await query.answer("Payment Approved!")
         await query.edit_message_caption(
@@ -426,7 +475,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML"
         )
         try:
-            await context.bot.send_message(chat_id=target_user, text=f"✅ <b>Payment Approved!</b>\nYour top-up of £{amount} has been verified.", parse_mode="HTML")
+            await context.bot.send_message(chat_id=target_user, text=f"✅ <b>Payment Approved!</b>\nYour top-up of £{amount} has been verified and added to your balance.", parse_mode="HTML")
         except Exception: pass
         return
         
@@ -614,7 +663,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("send_screenshot_"):
         await query.answer()
         amount = data.split("_")[2]
-        user_states[user_id] = {"state": "WAITING_FOR_SCREENSHOT", "amount": amount} # Track expected amount for logging
+        user_states[user_id] = {"state": "WAITING_FOR_SCREENSHOT", "amount": amount}
         await log_action(context, user, f"Clicked to send screenshot for £{amount} invoice")
         text = f"📸 <b>UPLOAD SCREENSHOT</b>\n– – – – – – – – – – – –\n\nPlease send the transaction screenshot/receipt for £{amount} now."
         keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="wallet")]]
@@ -628,10 +677,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "method":
         await query.answer()
         await log_action(context, user, "Opened the Methods Catalog")
-        methods = load_methods()
-        keyboard = [[InlineKeyboardButton(f"{m['title']}", callback_data=f"view_method_{m['id']}")] for m in methods]
-        keyboard.append([InlineKeyboardButton("🔙 Back to Store", callback_data="access_store")])
-        await query.edit_message_text("📦 <b>Methods Catalog</b>\n\nSelect method below to view details:\n\n====================================", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+        await send_methods_menu(query, context)
 
     elif data.startswith("view_method_"):
         await query.answer()
@@ -652,20 +698,52 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         method = next((m for m in load_methods() if m['id'] == method_id), None)
         if method:
             await log_action(context, user, f"Attempted to buy '{method['title']}' for £{method['price']}")
-            text = f"🛒 <b>Purchase Selection</b>\n\n<b>Item:</b> {method['title']}\n<b>Price:</b> £{method['price']}\n\nPlease top up your wallet to proceed with this purchase."
-            keyboard = [
-                [InlineKeyboardButton("💷 Go to Wallet", callback_data="wallet")],
-                [InlineKeyboardButton("🔙 Back to Details", callback_data=f"view_method_{method['id']}")]
-            ]
-            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+            
+            price = float(method['price'])
+            balance = get_balance(user_id)
+            
+            if balance >= price:
+                # Deduct balance & create order
+                deduct_balance(user_id, price)
+                cart_id = str(uuid.uuid4().hex)[:10]
+                carts = load_carts()
+                carts.append({
+                    "cart_id": cart_id,
+                    "user_id": user_id,
+                    "items": 1,
+                    "price": str(price),
+                    "date": datetime.now().strftime("%d/%m %H:%M")
+                })
+                save_carts(carts)
+                
+                text = f"✅ <b>Purchase Successful!</b>\n\n<b>Item:</b> {method['title']}\n<b>Price:</b> £{method['price']}\n\nYour order has been sent to our admins for delivery. You will receive your file here shortly."
+                await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Store", callback_data="main_menu")]]), parse_mode="HTML")
+            else:
+                text = f"🛒 <b>Purchase Selection</b>\n\n<b>Item:</b> {method['title']}\n<b>Price:</b> £{method['price']}\n\n❌ <b>Insufficient Balance!</b> Your balance is £{balance:.2f}.\nPlease top up your wallet to proceed."
+                keyboard = [
+                    [InlineKeyboardButton("💷 Go to Wallet", callback_data="wallet")],
+                    [InlineKeyboardButton("🔙 Back to Details", callback_data=f"view_method_{method['id']}")]
+                ]
+                await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
     elif data == "main_menu":
         await query.answer()
         await start(update, context)
 
+# --- Post Init (Menu Config) ---
+async def post_init(application: Application):
+    await application.bot.set_my_commands([
+        BotCommand("start", "🏠 Main menu"),
+        BotCommand("store", "🛒 Browse the store"),
+        BotCommand("wallet", "💵 View wallet & top up"),
+        BotCommand("rules", "🛡 Read the rules"),
+        BotCommand("support", "☎️ Contact support")
+    ])
+
 def main():
     if not BOT_TOKEN: raise ValueError("BOT_TOKEN environment variable is not set!")
-    app = Application.builder().token(BOT_TOKEN).build()
+    
+    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
     admin_conv_handler = ConversationHandler(
         entry_points=[CommandHandler('admin', admin_start)],
@@ -675,7 +753,10 @@ def main():
     
     app.add_handler(admin_conv_handler)
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("store", store_command))
     app.add_handler(CommandHandler("wallet", wallet_command))
+    app.add_handler(CommandHandler("rules", rules_command))
+    app.add_handler(CommandHandler("support", support_command))
     
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_general_messages))
     app.add_handler(CallbackQueryHandler(handle_callback))
