@@ -122,12 +122,10 @@ def save_json(file_path, data):
 
 def load_methods():
     methods = load_json(METHODS_FILE, DEFAULT_METHODS)
-    # Alphabetical A-Z sorting
     methods.sort(key=lambda x: str(x.get('title', '')).lower())
     return methods
 
 def save_methods(data):
-    # Sort before saving
     data.sort(key=lambda x: str(x.get('title', '')).lower())
     save_json(METHODS_FILE, data)
 
@@ -136,39 +134,35 @@ def save_labels(data): save_json(LABELS_FILE, data)
 
 def load_users(): return load_json(USERS_FILE, [])
 
-def get_user_list():
-    raw_users = load_users()
-    users_list = []
-    for u in raw_users:
-        if isinstance(u, dict):
-            users_list.append(u)
-        else:
-            users_list.append({"id": u, "username": f"User {u}", "join_date": "Legacy User"})
-    return users_list
-
 def save_user(user):
     users = load_users()
     user_id = user.id
     username = f"@{user.username}" if user.username else user.first_name
     
-    # Check if user exists
-    exists = False
-    for u in users:
+    for i, u in enumerate(users):
         if isinstance(u, dict) and u.get("id") == user_id:
-            exists = True
-            break
+            if u.get("username") != username:
+                users[i]["username"] = username
+                save_json(USERS_FILE, users)
+            return
         elif isinstance(u, int) and u == user_id:
-            exists = True
-            break
+            # Upgrade legacy integer ID to dictionary
+            users[i] = {
+                "id": user_id,
+                "username": username,
+                "join_date": datetime.now().strftime("%d/%m/%Y %H:%M")
+            }
+            save_json(USERS_FILE, users)
+            return
             
-    if not exists:
-        join_date = datetime.now().strftime("%d/%m/%Y %H:%M")
-        users.append({
-            "id": user_id,
-            "username": username,
-            "join_date": join_date
-        })
-        save_json(USERS_FILE, users)
+    # New User
+    join_date = datetime.now().strftime("%d/%m/%Y %H:%M")
+    users.append({
+        "id": user_id,
+        "username": username,
+        "join_date": join_date
+    })
+    save_json(USERS_FILE, users)
 
 def load_carts(): return load_json(CARTS_FILE, [])
 def save_carts(data): save_json(CARTS_FILE, data)
@@ -427,6 +421,7 @@ async def admin_set_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user = update.effective_user
+    save_user(user) # Guarantee profile update on any interaction
     
     if user_id in user_states:
         state = user_states.get(user_id).get("state")
@@ -532,7 +527,6 @@ async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_
                 carts = [c for c in carts if str(c["cart_id"]) != str(cart_id)]
                 save_carts(carts)
                 
-                # Mark status delivered in sales history
                 sales = load_sales()
                 for s in sales:
                     if str(s.get("cart_id")) == str(cart_id):
@@ -591,6 +585,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
     user = query.from_user
+    save_user(user) # Guarantee profile update on any interaction
     data = query.data
 
     # Log Group Admin Actions
@@ -641,7 +636,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # --- STATS DASHBOARD ---
         elif data == "admin_stats":
             await query.answer()
-            users_count = len(get_user_list())
+            users_count = len(load_users())
             live_stock = len(load_methods())
             carts = load_carts()
             sales = load_sales()
@@ -651,8 +646,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pending_delivery_count = len(carts)
             
             total_revenue = sum(float(s.get("price", 0)) for s in sales if s.get("status") == "delivered")
-            
-            # Count user states waiting for screenshot or active deposit
             pending_topups_count = len([uid for uid, st in user_states.items() if st.get("state") in ["WAITING_FOR_SCREENSHOT", "WAITING_CUSTOM_AMOUNT"]])
 
             stats_text = (
@@ -669,21 +662,41 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard = [[InlineKeyboardButton("⬅️ Admin Menu", callback_data="admin_home")]]
             await query.edit_message_text(stats_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
-        # --- USERS LIST ---
+        # --- USERS LIST & AUTO-FETCH LEGACY ---
         elif data == "admin_users":
             await query.answer()
-            users_list = get_user_list()
-            text = f"👥 <b>Total Users ({len(users_list)})</b>\n\n"
+            raw_users = load_users()
+            updated_any = False
+            text = f"👥 <b>Total Users ({len(raw_users)})</b>\n\n"
             
-            for index, u in enumerate(users_list, start=1):
-                u_id = u.get("id")
-                u_name = safe_html(u.get("username", "Unknown"))
-                j_date = u.get("join_date", "Unknown")
-                text += f"{index}. {u_name} (ID: <code>{u_id}</code>)\n   📅 <b>Started:</b> {j_date}\n\n"
-                if len(text) > 3500:  # Telegram message character limit protection
+            for index, u in enumerate(raw_users):
+                if isinstance(u, int):
+                    # Actively hunt down legacy user usernames
+                    try:
+                        chat = await context.bot.get_chat(u)
+                        u_name = f"@{chat.username}" if chat.username else chat.first_name
+                        j_date = datetime.now().strftime("%d/%m/%Y %H:%M")
+                        u_obj = {"id": u, "username": u_name, "join_date": j_date}
+                        raw_users[index] = u_obj
+                        u_id = u
+                        updated_any = True
+                    except Exception:
+                        u_id = u
+                        u_name = f"Unknown (ID: {u})"
+                        j_date = "Prior to update"
+                else:
+                    u_id = u.get("id")
+                    u_name = safe_html(u.get("username", "Unknown"))
+                    j_date = u.get("join_date", "Unknown")
+                    
+                text += f"{index + 1}. {u_name} (ID: <code>{u_id}</code>)\n   📅 <b>Started:</b> {j_date}\n\n"
+                if len(text) > 3500:
                     text += "<i>...and more users</i>"
                     break
                     
+            if updated_any:
+                save_json(USERS_FILE, raw_users)
+                
             keyboard = [[InlineKeyboardButton("⬅️ Admin Menu", callback_data="admin_home")]]
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
@@ -962,7 +975,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             cart_id = str(uuid.uuid4().hex)[:10]
             date_str = datetime.now().strftime("%d/%m %H:%M")
             
-            # Save to active carts
             carts = load_carts()
             carts.append({
                 "cart_id": cart_id,
@@ -974,7 +986,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             })
             save_carts(carts)
             
-            # Record sale tracking
             sales = load_sales()
             sales.append({
                 "cart_id": cart_id,
