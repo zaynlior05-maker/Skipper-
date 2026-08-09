@@ -309,7 +309,15 @@ async def admin_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def verify_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if update.message.text == ADMIN_PASSWORD:
+    text = update.message.text
+    
+    # NEW: Attempt to delete the user's password message
+    try:
+        await update.message.delete()
+    except Exception as e:
+        logging.warning(f"Could not delete password message (bot may lack permissions): {e}")
+        
+    if text == ADMIN_PASSWORD:
         admin_sessions[user_id] = datetime.now() + timedelta(hours=2)
         await update.message.reply_text("✅ <b>Access granted!</b> Session lasts 2 hours.\n\n🛠 <b>Admin Panel</b>\n\nChoose a section:", reply_markup=get_admin_keyboard(), parse_mode="HTML")
     else:
@@ -580,19 +588,31 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not carts:
                 await query.edit_message_text("📦 <b>Pending Deliveries</b>\n\nNo pending orders found.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Admin Menu", callback_data="admin_home")]]), parse_mode="HTML")
                 return
-            text = f"📦 <b>Pending Deliveries</b> ({len(carts)} carts)\n\n"
+            text = f"📦 <b>Pending Deliveries</b> ({len(carts)} pending)\n\n"
             keyboard = []
             for c in carts:
-                text += f"• Cart {c['cart_id']}  User: {c['user_id']}\n{c['items']} item  £{c['price']}  {c['date']}\n"
-                keyboard.append([InlineKeyboardButton(f"📤 Deliver Cart #{c['cart_id']}", callback_data=f"deliver_{c['cart_id']}_{c['user_id']}")])
+                item_title = c.get("title", "Unknown Item")
+                text += f"• <b>{item_title}</b> (User: <code>{c['user_id']}</code>)\nDate: {c['date']}\n\n"
+                keyboard.append([InlineKeyboardButton(f"📤 Deliver {item_title}", callback_data=f"deliver_{c['cart_id']}_{c['user_id']}")])
             keyboard.append([InlineKeyboardButton("⬅️ Admin Menu", callback_data="admin_home")])
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
             
         elif data.startswith("deliver_"):
             parts = data.split("_")
-            admin_states[user_id] = {"state": "WAITING_DELIVERY", "cart_id": parts[1], "user_id": parts[2]}
+            cart_id = parts[1]
+            target_user = parts[2]
+            
+            # Find the title to make the prompt look better
+            carts = load_carts()
+            item_title = "the order"
+            for c in carts:
+                if str(c["cart_id"]) == str(cart_id):
+                    item_title = c.get("title", "the order")
+                    break
+
+            admin_states[user_id] = {"state": "WAITING_DELIVERY", "cart_id": cart_id, "user_id": target_user}
             await query.answer()
-            await query.edit_message_text(f"📤 <b>Delivery Mode (Cart #{parts[1]})</b>\n\nPlease upload the delivery file/text now.", parse_mode="HTML")
+            await query.edit_message_text(f"📤 <b>Delivery Mode</b>\n\nDelivering: <b>{item_title}</b>\n\nPlease upload the delivery file/text now. It will be sent directly to user {target_user}.", parse_mode="HTML")
 
         elif data == "admin_broadcast":
             admin_states[user_id] = {"state": "WAITING_BROADCAST"}
@@ -711,22 +731,22 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 deduct_balance(user_id, price)
                 cart_id = str(uuid.uuid4().hex)[:10]
                 carts = load_carts()
+                # NEW: Saving the item title to the database to be used in deliveries panel
                 carts.append({
                     "cart_id": cart_id,
                     "user_id": user_id,
                     "items": 1,
+                    "title": method['title'],
                     "price": str(price),
                     "date": datetime.now().strftime("%d/%m %H:%M")
                 })
                 save_carts(carts)
                 
-                # ✅ Priority Log for successful purchase
                 await log_action(context, user, f"✅ SUCCESSFULLY PURCHASED '{method['title']}'! Please deliver order now.")
                 
                 text = f"✅ <b>Purchase Successful!</b>\n\n<b>Item:</b> {method['title']}\n<b>Price:</b> £{method['price']}\n\nYour order has been sent to our admins for delivery. You will receive your file here shortly."
                 await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Store", callback_data="main_menu")]]), parse_mode="HTML")
             else:
-                # ❌ Regular Log for failed attempt
                 await log_action(context, user, f"Attempted to buy '{method['title']}' for £{method['price']} (Insufficient Balance)")
                 
                 text = f"🛒 <b>Purchase Selection</b>\n\n<b>Item:</b> {method['title']}\n<b>Price:</b> £{method['price']}\n\n❌ <b>Insufficient Balance!</b> Your balance is £{balance:.2f}.\nPlease top up your wallet to proceed."
