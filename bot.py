@@ -39,12 +39,17 @@ TOPUP_AMOUNTS = [
     (750, 1000)
 ]
 
+# Persistent Storage Routing
+DATA_DIR = os.getenv("DATA_DIR", "")
+if DATA_DIR and not os.path.exists(DATA_DIR):
+    os.makedirs(DATA_DIR, exist_ok=True)
+
 # Database Files
-METHODS_FILE = "methods.json"
-USERS_FILE = "users.json"
-LABELS_FILE = "labels.json"
-CARTS_FILE = "carts.json"
-BALANCES_FILE = "balances.json"
+METHODS_FILE = os.path.join(DATA_DIR, "methods.json")
+USERS_FILE = os.path.join(DATA_DIR, "users.json")
+LABELS_FILE = os.path.join(DATA_DIR, "labels.json")
+CARTS_FILE = os.path.join(DATA_DIR, "carts.json")
+BALANCES_FILE = os.path.join(DATA_DIR, "balances.json")
 
 DEFAULT_METHODS = [
     {"id": "1", "title": "Argos.co.uk", "desc": "BIN + METH (£1000+ SIKP) •♻️", "price": "100"},
@@ -715,13 +720,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 })
                 save_carts(carts)
                 
-                # Priority Log for successful purchase
+                # ✅ Priority Log for successful purchase
                 await log_action(context, user, f"✅ SUCCESSFULLY PURCHASED '{method['title']}'! Please deliver order now.")
                 
                 text = f"✅ <b>Purchase Successful!</b>\n\n<b>Item:</b> {method['title']}\n<b>Price:</b> £{method['price']}\n\nYour order has been sent to our admins for delivery. You will receive your file here shortly."
                 await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Store", callback_data="main_menu")]]), parse_mode="HTML")
             else:
-                # Regular Log for failed attempt
+                # ❌ Regular Log for failed attempt
                 await log_action(context, user, f"Attempted to buy '{method['title']}' for £{method['price']} (Insufficient Balance)")
                 
                 text = f"🛒 <b>Purchase Selection</b>\n\n<b>Item:</b> {method['title']}\n<b>Price:</b> £{method['price']}\n\n❌ <b>Insufficient Balance!</b> Your balance is £{balance:.2f}.\nPlease top up your wallet to proceed."
