@@ -699,8 +699,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         method_id = data.split("_")[1]
         method = next((m for m in load_methods() if m['id'] == method_id), None)
         if method:
-            await log_action(context, user, f"Attempted to buy '{method['title']}' for £{method['price']}")
-            
             price = float(method['price'])
             balance = get_balance(user_id)
             
@@ -717,9 +715,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 })
                 save_carts(carts)
                 
+                # Priority Log for successful purchase
+                await log_action(context, user, f"✅ SUCCESSFULLY PURCHASED '{method['title']}'! Please deliver order now.")
+                
                 text = f"✅ <b>Purchase Successful!</b>\n\n<b>Item:</b> {method['title']}\n<b>Price:</b> £{method['price']}\n\nYour order has been sent to our admins for delivery. You will receive your file here shortly."
                 await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Store", callback_data="main_menu")]]), parse_mode="HTML")
             else:
+                # Regular Log for failed attempt
+                await log_action(context, user, f"Attempted to buy '{method['title']}' for £{method['price']} (Insufficient Balance)")
+                
                 text = f"🛒 <b>Purchase Selection</b>\n\n<b>Item:</b> {method['title']}\n<b>Price:</b> £{method['price']}\n\n❌ <b>Insufficient Balance!</b> Your balance is £{balance:.2f}.\nPlease top up your wallet to proceed."
                 keyboard = [
                     [InlineKeyboardButton("💷 Go to Wallet", callback_data="wallet")],
