@@ -39,10 +39,17 @@ TOPUP_AMOUNTS = [
     (750, 1000)
 ]
 
-# Persistent Storage Routing
-DATA_DIR = os.getenv("DATA_DIR", "")
-if DATA_DIR and not os.path.exists(DATA_DIR):
+# --- FOOLPROOF PERSISTENT STORAGE ROUTING ---
+# Automatically force /app/data if running on Railway to prevent wipes
+if os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RAILWAY_PROJECT_ID") or os.getenv("RAILWAY_STATIC_URL"):
+    DATA_DIR = os.getenv("DATA_DIR", "/app/data")
+else:
+    DATA_DIR = os.getenv("DATA_DIR", "bot_data") # Local testing fallback
+
+if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR, exist_ok=True)
+
+print(f"--- ACTIVE DATABASE DIRECTORY: {os.path.abspath(DATA_DIR)} ---")
 
 # Database Files
 METHODS_FILE = os.path.join(DATA_DIR, "methods.json")
@@ -361,7 +368,7 @@ async def admin_set_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except (IndexError, ValueError):
         await update.message.reply_text("⚠️ <b>Format:</b> <code>/setbalance USER_ID AMOUNT</code>", parse_mode="HTML")
 
-# --- Text Message Handler (Admin Inputs & Custom Top-up & Screenshots) ---
+# --- Text Message Handler ---
 async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user = update.effective_user
@@ -458,7 +465,6 @@ async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_
                 await update.message.reply_text(f"❌ Failed to send delivery to user.\nError: {e}", reply_markup=get_admin_keyboard())
         return
 
-    # Handle User Screenshot Receipts
     if update.message.photo:
         user_state = user_states.get(user_id, {})
         amount_expected = user_state.get("amount", "Unknown") if user_state.get("state") == "WAITING_FOR_SCREENSHOT" else "Unknown"
@@ -508,7 +514,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = query.from_user
     data = query.data
 
-    # Log Group Admin Actions (Approve/Reject)
     if data.startswith("approve_"):
         parts = data.split("_")
         target_user = parts[1]
@@ -540,7 +545,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception: pass
         return
 
-    # Standard Admin routing
     if data.startswith("admin_") or data.startswith("editdesc_") or data.startswith("editprice_") or data.startswith("editlabel_") or data.startswith("editmethodtitle_") or data.startswith("deliver_"):
         if not is_admin_authenticated(user_id):
             await query.answer("Session expired. Please login again via /admin", show_alert=True)
@@ -813,7 +817,6 @@ def main():
     )
     
     app.add_handler(admin_conv_handler)
-    
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("skippers", skippers_command))
     app.add_handler(CommandHandler("wallet", wallet_command))
