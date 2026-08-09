@@ -366,7 +366,7 @@ async def admin_set_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except (IndexError, ValueError):
         await update.message.reply_text("⚠️ <b>Format:</b> <code>/setbalance USER_ID AMOUNT</code>", parse_mode="HTML")
 
-# --- Text Message Handler (Admin Inputs & Custom Top-up & Screenshots) ---
+# --- Text Message Handler ---
 async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user = update.effective_user
@@ -395,8 +395,10 @@ async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_
             skipped_count = 0
             failed_lines = []
             
-            for line in lines:
-                if not line.strip(): continue
+            for raw_line in lines:
+                if not raw_line.strip(): continue
+                # Normalize dashes and non-breaking spaces automatically
+                line = raw_line.replace('–', '-').replace('—', '-').replace('\xa0', ' ').strip()
                 try:
                     title_part, rest = line.split('=', 1)
                     desc_part, price_part = rest.rsplit('-', 1)
@@ -404,7 +406,6 @@ async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_
                     desc = desc_part.strip()
                     price = price_part.replace('£', '').strip()
 
-                    # Check for duplicates or updates
                     existing = next((m for m in methods if m['title'].lower() == title.lower()), None)
                     if existing:
                         if existing['desc'] == desc and existing['price'] == price:
@@ -418,12 +419,12 @@ async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_
                         methods.append({"id": new_id, "title": title, "desc": desc, "price": price})
                         added_count += 1
                 except ValueError:
-                    failed_lines.append(line)
+                    failed_lines.append(raw_line)
             
             save_methods(methods)
             response = f"✅ <b>Stock processed!</b>\n➕ Added: {added_count}\n🔄 Updated: {updated_count}\n⏭ Skipped (Duplicates): {skipped_count}"
             if failed_lines:
-                response += "\n\n⚠️ Failed to parse these lines (Make sure you use format Title = Desc - Price):\n" + "\n".join(failed_lines)
+                response += "\n\n⚠️ Failed to parse these lines:\n" + "\n".join(failed_lines)
             await update.message.reply_text(response, reply_markup=get_admin_keyboard(), parse_mode="HTML")
 
         elif state == "WAITING_DESC" and update.message.text:
@@ -479,7 +480,6 @@ async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_
                 await update.message.reply_text(f"❌ Failed to send delivery to user.\nError: {e}", reply_markup=get_admin_keyboard())
         return
 
-    # Handle User Screenshot Receipts
     if update.message.photo:
         user_state = user_states.get(user_id, {})
         amount_expected = user_state.get("amount", "Unknown") if user_state.get("state") == "WAITING_FOR_SCREENSHOT" else "Unknown"
@@ -529,7 +529,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = query.from_user
     data = query.data
 
-    # Log Group Admin Actions (Approve/Reject)
     if data.startswith("approve_"):
         parts = data.split("_")
         target_user = parts[1]
@@ -561,7 +560,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception: pass
         return
 
-    # Standard Admin routing
     if data.startswith("admin_") or data.startswith("editdesc_") or data.startswith("editprice_") or data.startswith("editlabel_") or data.startswith("editmethodtitle_") or data.startswith("deliver_") or data.startswith("toggle_del_") or data == "confirm_del_stock":
         if not is_admin_authenticated(user_id):
             await query.answer("Session expired. Please login again via /admin", show_alert=True)
@@ -587,7 +585,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             await query.edit_message_text(text, parse_mode="HTML")
 
-        # --- MULTI-SELECT STOCK DELETION ---
         elif data == "admin_delete_stock":
             admin_states[user_id] = {"state": "DELETING_STOCK", "selected": []}
             await query.answer()
@@ -883,7 +880,6 @@ def main():
     )
     
     app.add_handler(admin_conv_handler)
-    
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("skippers", skippers_command))
     app.add_handler(CommandHandler("wallet", wallet_command))
