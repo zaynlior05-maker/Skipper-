@@ -311,11 +311,10 @@ async def verify_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text
     
-    # NEW: Attempt to delete the user's password message
     try:
         await update.message.delete()
     except Exception as e:
-        logging.warning(f"Could not delete password message (bot may lack permissions): {e}")
+        logging.warning(f"Could not delete password message: {e}")
         
     if text == ADMIN_PASSWORD:
         admin_sessions[user_id] = datetime.now() + timedelta(hours=2)
@@ -327,6 +326,40 @@ async def verify_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cancel_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Admin login cancelled.")
     return ConversationHandler.END
+
+# --- Manual Balance Adjustment Commands ---
+async def admin_add_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_admin_authenticated(user_id):
+        await update.message.reply_text("❌ Please login via /admin first.")
+        return
+    
+    try:
+        target_user = int(context.args[0])
+        amount = float(context.args[1])
+        add_balance(target_user, amount)
+        await update.message.reply_text(f"✅ Successfully added £{amount:.2f} to user {target_user}.\nNew balance: £{get_balance(target_user):.2f}")
+        try:
+            await context.bot.send_message(chat_id=target_user, text=f"💰 Your balance has been credited with £{amount:.2f} by an admin.")
+        except Exception: pass
+    except (IndexError, ValueError):
+        await update.message.reply_text("⚠️ <b>Format:</b> <code>/addbalance USER_ID AMOUNT</code>", parse_mode="HTML")
+
+async def admin_set_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_admin_authenticated(user_id):
+        await update.message.reply_text("❌ Please login via /admin first.")
+        return
+    
+    try:
+        target_user = int(context.args[0])
+        amount = float(context.args[1])
+        bals = load_balances()
+        bals[str(target_user)] = amount
+        save_balances(bals)
+        await update.message.reply_text(f"✅ Successfully set user {target_user} balance to £{amount:.2f}.")
+    except (IndexError, ValueError):
+        await update.message.reply_text("⚠️ <b>Format:</b> <code>/setbalance USER_ID AMOUNT</code>", parse_mode="HTML")
 
 # --- Text Message Handler (Admin Inputs & Custom Top-up & Screenshots) ---
 async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -602,7 +635,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             cart_id = parts[1]
             target_user = parts[2]
             
-            # Find the title to make the prompt look better
             carts = load_carts()
             item_title = "the order"
             for c in carts:
@@ -731,7 +763,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 deduct_balance(user_id, price)
                 cart_id = str(uuid.uuid4().hex)[:10]
                 carts = load_carts()
-                # NEW: Saving the item title to the database to be used in deliveries panel
                 carts.append({
                     "cart_id": cart_id,
                     "user_id": user_id,
@@ -782,11 +813,15 @@ def main():
     )
     
     app.add_handler(admin_conv_handler)
+    
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("skippers", skippers_command))
     app.add_handler(CommandHandler("wallet", wallet_command))
     app.add_handler(CommandHandler("rules", rules_command))
     app.add_handler(CommandHandler("support", support_command))
+    
+    app.add_handler(CommandHandler("addbalance", admin_add_balance))
+    app.add_handler(CommandHandler("setbalance", admin_set_balance))
     
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_general_messages))
     app.add_handler(CallbackQueryHandler(handle_callback))
