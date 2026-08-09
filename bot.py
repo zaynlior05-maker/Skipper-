@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import uuid
+import re
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes, ConversationHandler
@@ -98,6 +99,10 @@ def make_safe_url(link: str) -> str:
     if not link: return "https://telegram.org"
     if link.startswith("http://") or link.startswith("https://"): return link
     return f"https://t.me/{link.replace('@', '')}"
+
+def safe_html(text: str) -> str:
+    """Escapes HTML tags to prevent parsing crashes."""
+    return str(text).replace('<', '&lt;').replace('>', '&gt;').replace('&', '&amp;')
 
 # --- Database Loaders & Savers ---
 def load_json(file_path, default_data):
@@ -397,7 +402,6 @@ async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_
             
             for raw_line in lines:
                 if not raw_line.strip(): continue
-                # Normalize dashes and non-breaking spaces automatically
                 line = raw_line.replace('–', '-').replace('—', '-').replace('\xa0', ' ').strip()
                 try:
                     title_part, rest = line.split('=', 1)
@@ -424,20 +428,20 @@ async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_
             save_methods(methods)
             response = f"✅ <b>Stock processed!</b>\n➕ Added: {added_count}\n🔄 Updated: {updated_count}\n⏭ Skipped (Duplicates): {skipped_count}"
             if failed_lines:
-                response += "\n\n⚠️ Failed to parse these lines:\n" + "\n".join(failed_lines)
+                response += "\n\n⚠️ Failed to parse these lines (Make sure you use format Title = Desc - Price):\n" + "\n".join(failed_lines)
             await update.message.reply_text(response, reply_markup=get_admin_keyboard(), parse_mode="HTML")
 
         elif state == "WAITING_DESC" and update.message.text:
             methods = load_methods()
             for m in methods:
-                if m['id'] == state_data["method_id"]: m['desc'] = update.message.text
+                if str(m['id']) == str(state_data["method_id"]): m['desc'] = update.message.text
             save_methods(methods)
             await update.message.reply_text("✅ Description updated successfully!", reply_markup=get_admin_keyboard())
             
         elif state == "WAITING_PRICE" and update.message.text:
             methods = load_methods()
             for m in methods:
-                if m['id'] == state_data["method_id"]: m['price'] = update.message.text.replace('£', '').strip()
+                if str(m['id']) == str(state_data["method_id"]): m['price'] = update.message.text.replace('£', '').strip()
             save_methods(methods)
             await update.message.reply_text("✅ Price updated successfully!", reply_markup=get_admin_keyboard())
 
@@ -450,7 +454,7 @@ async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_
         elif state == "WAITING_METHOD_TITLE" and update.message.text:
             methods = load_methods()
             for m in methods:
-                if m['id'] == state_data["method_id"]: m['title'] = update.message.text.strip()
+                if str(m['id']) == str(state_data["method_id"]): m['title'] = update.message.text.strip()
             save_methods(methods)
             await update.message.reply_text("✅ Method Title updated successfully!", reply_markup=get_admin_keyboard())
 
@@ -480,6 +484,7 @@ async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_
                 await update.message.reply_text(f"❌ Failed to send delivery to user.\nError: {e}", reply_markup=get_admin_keyboard())
         return
 
+    # Handle User Screenshot Receipts
     if update.message.photo:
         user_state = user_states.get(user_id, {})
         amount_expected = user_state.get("amount", "Unknown") if user_state.get("state") == "WAITING_FOR_SCREENSHOT" else "Unknown"
@@ -529,6 +534,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = query.from_user
     data = query.data
 
+    # Log Group Admin Actions
     if data.startswith("approve_"):
         parts = data.split("_")
         target_user = parts[1]
@@ -560,6 +566,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception: pass
         return
 
+    # Standard Admin routing
     if data.startswith("admin_") or data.startswith("editdesc_") or data.startswith("editprice_") or data.startswith("editlabel_") or data.startswith("editmethodtitle_") or data.startswith("deliver_") or data.startswith("toggle_del_") or data == "confirm_del_stock":
         if not is_admin_authenticated(user_id):
             await query.answer("Session expired. Please login again via /admin", show_alert=True)
@@ -611,7 +618,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             selected = admin_states.get(user_id, {}).get("selected", [])
             keyboard = []
             for m in methods:
-                mark = "✅" if m['id'] in selected else "⬜️"
+                mark = "✅" if str(m['id']) in selected else "⬜️"
                 keyboard.append([InlineKeyboardButton(f"{mark} {m['title']}", callback_data=f"toggle_del_{m['id']}")])
             
             if selected:
@@ -627,7 +634,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.answer("No items selected!", show_alert=True)
                 return
             methods = load_methods()
-            new_methods = [m for m in methods if m['id'] not in selected]
+            new_methods = [m for m in methods if str(m['id']) not in selected]
             save_methods(new_methods)
             admin_states.pop(user_id, None)
             await query.answer(f"Deleted {len(selected)} items!", show_alert=True)
@@ -808,51 +815,68 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("view_method_"):
         await query.answer()
         method_id = data.split("_")[2]
-        method = next((m for m in load_methods() if m['id'] == method_id), None)
+        method = next((m for m in load_methods() if str(m['id']) == str(method_id)), None)
         if method:
+            safe_title = safe_html(method['title'])
+            safe_desc = safe_html(method['desc'])
+            
             await log_action(context, user, f"Viewed details for '{method['title']}'")
-            text = f"📚 <b>{method['title']}</b> {method['desc']}\n£{method['price']}\n\n---------------------------------"
+            text = f"📚 <b>{safe_title}</b> {safe_desc}\n£{method['price']}\n\n---------------------------------"
             keyboard = [
                 [InlineKeyboardButton("🛒 Buy Now", callback_data=f"buy_{method['id']}")],
                 [InlineKeyboardButton("🔙 Back to Catalog", callback_data="method")]
             ]
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+        else:
+            await query.answer("This item is no longer available.", show_alert=True)
 
     elif data.startswith("buy_"):
         await query.answer()
-        method_id = data.split("_")[1]
-        method = next((m for m in load_methods() if m['id'] == method_id), None)
-        if method:
-            price = float(method['price'])
-            balance = get_balance(user_id)
+        method_id = data.replace("buy_", "")
+        method = next((m for m in load_methods() if str(m['id']) == str(method_id)), None)
+        
+        if not method:
+            await query.edit_message_text("❌ This item is no longer available.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Store", callback_data="main_menu")]]))
+            return
+
+        try:
+            # Bullet-proof price string cleaning to prevent python crashes
+            clean_price_str = str(method['price']).replace('£', '').replace(',', '').strip()
+            price = float(clean_price_str)
+        except ValueError:
+            await query.edit_message_text("❌ Error: Invalid price configuration for this item. Please contact admin.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="main_menu")]]))
+            return
             
-            if balance >= price:
-                deduct_balance(user_id, price)
-                cart_id = str(uuid.uuid4().hex)[:10]
-                carts = load_carts()
-                carts.append({
-                    "cart_id": cart_id,
-                    "user_id": user_id,
-                    "items": 1,
-                    "title": method['title'],
-                    "price": str(price),
-                    "date": datetime.now().strftime("%d/%m %H:%M")
-                })
-                save_carts(carts)
-                
-                await log_action(context, user, f"✅ SUCCESSFULLY PURCHASED '{method['title']}'! Please deliver order now.")
-                
-                text = f"✅ <b>Purchase Successful!</b>\n\n<b>Item:</b> {method['title']}\n<b>Price:</b> £{method['price']}\n\nYour order has been sent to our admins for delivery. You will receive your file here shortly."
-                await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Store", callback_data="main_menu")]]), parse_mode="HTML")
-            else:
-                await log_action(context, user, f"Attempted to buy '{method['title']}' for £{method['price']} (Insufficient Balance)")
-                
-                text = f"🛒 <b>Purchase Selection</b>\n\n<b>Item:</b> {method['title']}\n<b>Price:</b> £{method['price']}\n\n❌ <b>Insufficient Balance!</b> Your balance is £{balance:.2f}.\nPlease top up your wallet to proceed."
-                keyboard = [
-                    [InlineKeyboardButton("💷 Go to Wallet", callback_data="wallet")],
-                    [InlineKeyboardButton("🔙 Back to Details", callback_data=f"view_method_{method['id']}")]
-                ]
-                await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+        balance = get_balance(user_id)
+        safe_title = safe_html(method['title'])
+        
+        if balance >= price:
+            deduct_balance(user_id, price)
+            cart_id = str(uuid.uuid4().hex)[:10]
+            carts = load_carts()
+            carts.append({
+                "cart_id": cart_id,
+                "user_id": user_id,
+                "items": 1,
+                "title": method['title'],
+                "price": str(price),
+                "date": datetime.now().strftime("%d/%m %H:%M")
+            })
+            save_carts(carts)
+            
+            await log_action(context, user, f"✅ SUCCESSFULLY PURCHASED '{method['title']}'! Please deliver order now.")
+            
+            text = f"✅ <b>Purchase Successful!</b>\n\n<b>Item:</b> {safe_title}\n<b>Price:</b> £{price:.2f}\n\nYour order has been sent to our admins for delivery. You will receive your file here shortly."
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Store", callback_data="main_menu")]]), parse_mode="HTML")
+        else:
+            await log_action(context, user, f"Attempted to buy '{method['title']}' for £{price:.2f} (Insufficient Balance)")
+            
+            text = f"🛒 <b>Purchase Selection</b>\n\n<b>Item:</b> {safe_title}\n<b>Price:</b> £{price:.2f}\n\n❌ <b>Insufficient Balance!</b> Your balance is £{balance:.2f}.\nPlease top up your wallet to proceed."
+            keyboard = [
+                [InlineKeyboardButton("💷 Go to Wallet", callback_data="wallet")],
+                [InlineKeyboardButton("🔙 Back to Details", callback_data=f"view_method_{method['id']}")]
+            ]
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
     elif data == "main_menu":
         await query.answer()
