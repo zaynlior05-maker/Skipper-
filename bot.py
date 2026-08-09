@@ -134,6 +134,16 @@ def save_labels(data): save_json(LABELS_FILE, data)
 
 def load_users(): return load_json(USERS_FILE, [])
 
+def get_user_list():
+    raw_users = load_users()
+    users_list = []
+    for u in raw_users:
+        if isinstance(u, dict):
+            users_list.append(u)
+        else:
+            users_list.append({"id": u, "username": f"User {u}", "join_date": "Legacy User"})
+    return users_list
+
 def save_user(user):
     users = load_users()
     user_id = user.id
@@ -146,7 +156,6 @@ def save_user(user):
                 save_json(USERS_FILE, users)
             return
         elif isinstance(u, int) and u == user_id:
-            # Upgrade legacy integer ID to dictionary
             users[i] = {
                 "id": user_id,
                 "username": username,
@@ -155,7 +164,6 @@ def save_user(user):
             save_json(USERS_FILE, users)
             return
             
-    # New User
     join_date = datetime.now().strftime("%d/%m/%Y %H:%M")
     users.append({
         "id": user_id,
@@ -421,7 +429,7 @@ async def admin_set_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user = update.effective_user
-    save_user(user) # Guarantee profile update on any interaction
+    save_user(user) 
     
     if user_id in user_states:
         state = user_states.get(user_id).get("state")
@@ -480,8 +488,12 @@ async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_
 
         elif state == "WAITING_DESC" and update.message.text:
             methods = load_methods()
+            # Capture the exact HTML formatting created by the admin in Telegram
+            new_desc = update.message.text_html if hasattr(update.message, 'text_html') and update.message.text_html else update.message.text
+            
             for m in methods:
-                if str(m['id']) == str(state_data["method_id"]): m['desc'] = update.message.text
+                if str(m['id']) == str(state_data["method_id"]): 
+                    m['desc'] = new_desc
             save_methods(methods)
             await update.message.reply_text("✅ Description updated successfully!", reply_markup=get_admin_keyboard())
             
@@ -585,7 +597,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
     user = query.from_user
-    save_user(user) # Guarantee profile update on any interaction
+    save_user(user)
     data = query.data
 
     # Log Group Admin Actions
@@ -671,7 +683,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             for index, u in enumerate(raw_users):
                 if isinstance(u, int):
-                    # Actively hunt down legacy user usernames
                     try:
                         chat = await context.bot.get_chat(u)
                         u_name = f"@{chat.username}" if chat.username else chat.first_name
@@ -770,7 +781,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif data.startswith("editdesc_"):
             admin_states[user_id] = {"state": "WAITING_DESC", "method_id": data.split("_")[1]}
             await query.answer()
-            await query.edit_message_text("📝 <b>Please type the new description for this method now:</b>", parse_mode="HTML")
+            await query.edit_message_text("📝 <b>Please type the new description for this method now:</b>\n\n<i>Tip: You can use Telegram's built-in formatting to add clickable links, bold text, etc.</i>", parse_mode="HTML")
 
         elif data == "admin_prices":
             await query.answer()
@@ -939,10 +950,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         method = next((m for m in load_methods() if str(m['id']) == str(method_id)), None)
         if method:
             safe_title = safe_html(method['title'])
-            safe_desc = safe_html(method['desc'])
+            desc = method.get('desc', '') # Allow raw description formatting
             
             await log_action(context, user, f"Viewed details for '{method['title']}'")
-            text = f"📚 <b>{safe_title}</b> {safe_desc}\n£{method['price']}\n\n---------------------------------"
+            text = f"📚 <b>{safe_title}</b>\n{desc}\n\n<b>Price:</b> £{method['price']}\n---------------------------------"
             keyboard = [
                 [InlineKeyboardButton("🛒 Buy Now", callback_data=f"buy_{method['id']}")],
                 [InlineKeyboardButton("🔙 Back to Catalog", callback_data="method")]
