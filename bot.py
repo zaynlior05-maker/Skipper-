@@ -40,16 +40,13 @@ TOPUP_AMOUNTS = [
 ]
 
 # --- FOOLPROOF PERSISTENT STORAGE ROUTING ---
-# Automatically force /app/data if running on Railway to prevent wipes
 if os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RAILWAY_PROJECT_ID") or os.getenv("RAILWAY_STATIC_URL"):
     DATA_DIR = os.getenv("DATA_DIR", "/app/data")
 else:
-    DATA_DIR = os.getenv("DATA_DIR", "bot_data") # Local testing fallback
+    DATA_DIR = os.getenv("DATA_DIR", "bot_data")
 
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR, exist_ok=True)
-
-print(f"--- ACTIVE DATABASE DIRECTORY: {os.path.abspath(DATA_DIR)} ---")
 
 # Database Files
 METHODS_FILE = os.path.join(DATA_DIR, "methods.json")
@@ -300,9 +297,10 @@ async def support_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def get_admin_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📊 Stats", callback_data="admin_stats"), InlineKeyboardButton("👥 Users", callback_data="admin_users")],
-        [InlineKeyboardButton("➕ Add Stock", callback_data="admin_add_stock"), InlineKeyboardButton("💰 Prices", callback_data="admin_prices")],
-        [InlineKeyboardButton("📝 Description", callback_data="admin_descriptions"), InlineKeyboardButton("🏷 Labels", callback_data="admin_labels")],
-        [InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast"), InlineKeyboardButton("📦 Deliveries", callback_data="admin_deliveries")],
+        [InlineKeyboardButton("➕ Add Stock", callback_data="admin_add_stock"), InlineKeyboardButton("🗑️ Delete Stock", callback_data="admin_delete_stock")],
+        [InlineKeyboardButton("📝 Description", callback_data="admin_descriptions"), InlineKeyboardButton("💰 Prices", callback_data="admin_prices")],
+        [InlineKeyboardButton("🏷 Labels", callback_data="admin_labels"), InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast")],
+        [InlineKeyboardButton("📦 Deliveries", callback_data="admin_deliveries"), InlineKeyboardButton("💳 Payments", callback_data="admin_payments")],
         [InlineKeyboardButton("❌ Close", callback_data="admin_close")]
     ])
 
@@ -368,7 +366,7 @@ async def admin_set_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except (IndexError, ValueError):
         await update.message.reply_text("⚠️ <b>Format:</b> <code>/setbalance USER_ID AMOUNT</code>", parse_mode="HTML")
 
-# --- Text Message Handler ---
+# --- Text Message Handler (Admin Inputs & Custom Top-up & Screenshots) ---
 async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user = update.effective_user
@@ -393,6 +391,8 @@ async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_
             lines = update.message.text.strip().split('\n')
             methods = load_methods()
             added_count = 0
+            updated_count = 0
+            skipped_count = 0
             failed_lines = []
             
             for line in lines:
@@ -400,17 +400,31 @@ async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_
                 try:
                     title_part, rest = line.split('=', 1)
                     desc_part, price_part = rest.rsplit('-', 1)
-                    new_id = str(max([int(m['id']) for m in methods] + [0]) + 1)
-                    methods.append({"id": new_id, "title": title_part.strip(), "desc": desc_part.strip(), "price": price_part.replace('£', '').strip()})
-                    added_count += 1
+                    title = title_part.strip()
+                    desc = desc_part.strip()
+                    price = price_part.replace('£', '').strip()
+
+                    # Check for duplicates or updates
+                    existing = next((m for m in methods if m['title'].lower() == title.lower()), None)
+                    if existing:
+                        if existing['desc'] == desc and existing['price'] == price:
+                            skipped_count += 1
+                        else:
+                            existing['desc'] = desc
+                            existing['price'] = price
+                            updated_count += 1
+                    else:
+                        new_id = str(max([int(m['id']) for m in methods] + [0]) + 1)
+                        methods.append({"id": new_id, "title": title, "desc": desc, "price": price})
+                        added_count += 1
                 except ValueError:
                     failed_lines.append(line)
             
             save_methods(methods)
-            response = f"✅ Successfully added {added_count} new stock items!"
+            response = f"✅ <b>Stock processed!</b>\n➕ Added: {added_count}\n🔄 Updated: {updated_count}\n⏭ Skipped (Duplicates): {skipped_count}"
             if failed_lines:
-                response += "\n\n⚠️ Failed to parse these lines:\n" + "\n".join(failed_lines)
-            await update.message.reply_text(response, reply_markup=get_admin_keyboard())
+                response += "\n\n⚠️ Failed to parse these lines (Make sure you use format Title = Desc - Price):\n" + "\n".join(failed_lines)
+            await update.message.reply_text(response, reply_markup=get_admin_keyboard(), parse_mode="HTML")
 
         elif state == "WAITING_DESC" and update.message.text:
             methods = load_methods()
@@ -465,6 +479,7 @@ async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_
                 await update.message.reply_text(f"❌ Failed to send delivery to user.\nError: {e}", reply_markup=get_admin_keyboard())
         return
 
+    # Handle User Screenshot Receipts
     if update.message.photo:
         user_state = user_states.get(user_id, {})
         amount_expected = user_state.get("amount", "Unknown") if user_state.get("state") == "WAITING_FOR_SCREENSHOT" else "Unknown"
@@ -514,6 +529,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = query.from_user
     data = query.data
 
+    # Log Group Admin Actions (Approve/Reject)
     if data.startswith("approve_"):
         parts = data.split("_")
         target_user = parts[1]
@@ -545,7 +561,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception: pass
         return
 
-    if data.startswith("admin_") or data.startswith("editdesc_") or data.startswith("editprice_") or data.startswith("editlabel_") or data.startswith("editmethodtitle_") or data.startswith("deliver_"):
+    # Standard Admin routing
+    if data.startswith("admin_") or data.startswith("editdesc_") or data.startswith("editprice_") or data.startswith("editlabel_") or data.startswith("editmethodtitle_") or data.startswith("deliver_") or data.startswith("toggle_del_") or data == "confirm_del_stock":
         if not is_admin_authenticated(user_id):
             await query.answer("Session expired. Please login again via /admin", show_alert=True)
             return
@@ -569,7 +586,56 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "<code>Booking.com = bin + meth(£300) - 45</code>"
             )
             await query.edit_message_text(text, parse_mode="HTML")
-        
+
+        # --- MULTI-SELECT STOCK DELETION ---
+        elif data == "admin_delete_stock":
+            admin_states[user_id] = {"state": "DELETING_STOCK", "selected": []}
+            await query.answer()
+            methods = load_methods()
+            keyboard = [[InlineKeyboardButton(f"⬜️ {m['title']}", callback_data=f"toggle_del_{m['id']}")] for m in methods]
+            keyboard.append([InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_home")])
+            await query.edit_message_text("🗑️ <b>Delete Stock</b>\n\nSelect the items you want to delete:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+
+        elif data.startswith("toggle_del_"):
+            method_id = data.replace("toggle_del_", "")
+            state_data = admin_states.get(user_id, {})
+            if state_data.get("state") != "DELETING_STOCK":
+                admin_states[user_id] = {"state": "DELETING_STOCK", "selected": [method_id]}
+            else:
+                selected = state_data.get("selected", [])
+                if method_id in selected:
+                    selected.remove(method_id)
+                else:
+                    selected.append(method_id)
+                admin_states[user_id]["selected"] = selected
+            
+            await query.answer()
+            methods = load_methods()
+            selected = admin_states.get(user_id, {}).get("selected", [])
+            keyboard = []
+            for m in methods:
+                mark = "✅" if m['id'] in selected else "⬜️"
+                keyboard.append([InlineKeyboardButton(f"{mark} {m['title']}", callback_data=f"toggle_del_{m['id']}")])
+            
+            if selected:
+                keyboard.append([InlineKeyboardButton(f"🗑️ Confirm Delete ({len(selected)})", callback_data="confirm_del_stock")])
+            keyboard.append([InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_home")])
+            
+            text = "🗑️ <b>Delete Stock</b>\n\nSelect the items you want to delete. Click again to unselect.\nWhen ready, click Confirm Delete."
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+
+        elif data == "confirm_del_stock":
+            selected = admin_states.get(user_id, {}).get("selected", [])
+            if not selected:
+                await query.answer("No items selected!", show_alert=True)
+                return
+            methods = load_methods()
+            new_methods = [m for m in methods if m['id'] not in selected]
+            save_methods(new_methods)
+            admin_states.pop(user_id, None)
+            await query.answer(f"Deleted {len(selected)} items!", show_alert=True)
+            await query.edit_message_text(f"✅ Successfully deleted {len(selected)} items!", reply_markup=get_admin_keyboard(), parse_mode="HTML")
+
         elif data == "admin_descriptions":
             await query.answer()
             methods = load_methods()
@@ -817,6 +883,7 @@ def main():
     )
     
     app.add_handler(admin_conv_handler)
+    
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("skippers", skippers_command))
     app.add_handler(CommandHandler("wallet", wallet_command))
