@@ -29,7 +29,6 @@ LTC_ADDRESS = os.getenv("LTC_ADDRESS", "your_ltc_address_here")
 STORE_NAME = os.getenv("STORE_NAME", "Mazza X Gaara's Store")
 DEVELOPER_TAG = os.getenv("DEVELOPER_TAG", "@Kr3ptoV1")
 MANAGER_TAG = os.getenv("MANAGER_TAG", "@mazza4444")
-RULES_TEXT = os.getenv("RULES_TEXT", "1. No spamming\n2. Follow channel rules\n3. All purchases are final.")
 
 TOPUP_AMOUNTS = [
     (70, 100),
@@ -57,6 +56,7 @@ CARTS_FILE = os.path.join(DATA_DIR, "carts.json")
 BALANCES_FILE = os.path.join(DATA_DIR, "balances.json")
 SALES_FILE = os.path.join(DATA_DIR, "sales.json")
 TICKETS_FILE = os.path.join(DATA_DIR, "tickets.json")
+CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
 
 DEFAULT_METHODS = [
     {"id": "1", "title": "Amazon.com", "desc": "BIN + METH", "price": "75"},
@@ -69,9 +69,14 @@ DEFAULT_METHODS = [
 DEFAULT_LABELS = {
     "method": "Method",
     "wallet": "Wallet",
-    "rules": "Rules",
-    "support": "Support",
+    "faq": "FAQ",
+    "help": "Help",
     "channel": "Channel"
+}
+
+DEFAULT_CONFIG = {
+    "welcome": f"Welcome to {STORE_NAME}\n\nMade/Coded by {DEVELOPER_TAG} [pm for coding needs ]\nManaged by {MANAGER_TAG}\n\nUsername : {{username}}\nID: {{user_id}}\n\nUse the menu below to interact with the bot 🤖\n\n====================================",
+    "faq": "1. No spamming\n2. Follow channel rules\n3. All purchases are final."
 }
 
 # Admin & User states tracking
@@ -120,6 +125,9 @@ def load_json(file_path, default_data):
 def save_json(file_path, data):
     with open(file_path, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
+
+def load_config(): return load_json(CONFIG_FILE, DEFAULT_CONFIG)
+def save_config(data): save_json(CONFIG_FILE, data)
 
 def load_methods():
     methods = load_json(METHODS_FILE, DEFAULT_METHODS)
@@ -219,38 +227,34 @@ async def check_membership(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> 
     return False
 
 # --- Core Bot Menus & Commands ---
+def format_welcome_text(user):
+    config = load_config()
+    raw_welcome = config.get("welcome", DEFAULT_CONFIG["welcome"])
+    username = f"@{user.username}" if user.username else user.first_name
+    return raw_welcome.replace("{username}", username).replace("{user_id}", str(user.id)).replace("{STORE_NAME}", STORE_NAME)
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     save_user(user)
     await log_action(context, user, "Started the bot (/start)")
     
     is_member = await check_membership(user.id, context)
-    
     if is_member:
         await send_store_menu(update.message if update.message else update.callback_query, context)
         return
 
-    username = f"@{user.username}" if user.username else user.first_name
-    text = (
-        f"Welcome to {STORE_NAME}\n\n"
-        f"Made/Coded by {DEVELOPER_TAG} [pm for coding needs ]\n"
-        f"Managed by {MANAGER_TAG}\n\n"
-        f"Username : {username}\n"
-        f"ID: {user.id}\n\n"
-        f"Use the menu below to interact with the bot 🤖\n\n"
-        f"===================================="
-    )
+    text = format_welcome_text(user)
     labels = load_labels()
     keyboard = [
         [InlineKeyboardButton("🔑 Access Store", callback_data="access_store")],
-        [InlineKeyboardButton(f"🛡️ {labels.get('rules', 'Rules')}", callback_data="rules_main")]
+        [InlineKeyboardButton(f"🛡️ {labels.get('faq', 'FAQ')}", callback_data="faq_main")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     if update.message:
-        await update.message.reply_text(text, reply_markup=reply_markup)
+        await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="HTML")
     elif update.callback_query:
-        await update.callback_query.edit_message_text(text, reply_markup=reply_markup)
+        await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode="HTML")
 
 async def send_store_menu(query_or_message, context: ContextTypes.DEFAULT_TYPE):
     labels = load_labels()
@@ -259,10 +263,10 @@ async def send_store_menu(query_or_message, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton(f"📦 {labels.get('method', 'Method')}", callback_data="method")],
         [
             InlineKeyboardButton(f"💷 {labels.get('wallet', 'Wallet')}", callback_data="wallet"),
-            InlineKeyboardButton(f"☎️ {labels.get('support', 'Support')}", callback_data="support_menu")
+            InlineKeyboardButton(f"☎️ {labels.get('help', 'Help')}", callback_data="help_menu")
         ],
         [
-            InlineKeyboardButton(f"🛡️ {labels.get('rules', 'Rules')}", callback_data="rules_store"),
+            InlineKeyboardButton(f"🛡️ {labels.get('faq', 'FAQ')}", callback_data="faq_store"),
             InlineKeyboardButton(f"📄 {labels.get('channel', 'Channel')} ↗️", url=make_safe_url(UPDATES_CHANNEL_LINK))
         ]
     ]
@@ -323,8 +327,8 @@ async def send_payment_methods(query_or_message, amount: str):
     else:
         await query_or_message.reply_text(text, reply_markup=markup, parse_mode="HTML")
 
-async def send_support_menu(query_or_message, context: ContextTypes.DEFAULT_TYPE):
-    text = "🪪 <b>Support</b>\n\nHow can we help you today?\n\n• Report an issue with the bot\n• View the status of your existing tickets"
+async def send_help_menu(query_or_message, context: ContextTypes.DEFAULT_TYPE):
+    text = "🪪 <b>Help & Support</b>\n\nHow can we help you today?\n\n• Report an issue with the bot\n• View the status of your existing tickets"
     keyboard = [
         [InlineKeyboardButton("🐛 Report Issue", callback_data="report_issue")],
         [InlineKeyboardButton("📋 My Tickets", callback_data="my_tickets")],
@@ -355,21 +359,22 @@ async def wallet_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("You must join the channel first. Send /start to begin.")
 
-async def rules_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def faq_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     save_user(update.effective_user)
-    await log_action(context, update.effective_user, "Used /rules command")
+    await log_action(context, update.effective_user, "Used /faq command")
     if await check_membership(user_id, context):
-        await update.message.reply_text(f"🛡️ <b>Rules</b>\n\n{RULES_TEXT}", parse_mode="HTML")
+        faq_text = load_config().get("faq", DEFAULT_CONFIG["faq"])
+        await update.message.reply_text(f"🛡️ <b>FAQ</b>\n\n{faq_text}", parse_mode="HTML")
     else:
         await update.message.reply_text("You must join the channel first. Send /start to begin.")
 
-async def support_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     save_user(update.effective_user)
-    await log_action(context, update.effective_user, "Used /support command")
+    await log_action(context, update.effective_user, "Used /help command")
     if await check_membership(user_id, context):
-        await send_support_menu(update.message, context)
+        await send_help_menu(update.message, context)
     else:
         await update.message.reply_text("You must join the channel first. Send /start to begin.")
 
@@ -380,8 +385,8 @@ def get_admin_keyboard():
         [InlineKeyboardButton("➕ Add Stock", callback_data="admin_add_stock"), InlineKeyboardButton("🗑️ Delete Stock", callback_data="admin_delete_stock")],
         [InlineKeyboardButton("📝 Description", callback_data="admin_descriptions"), InlineKeyboardButton("💰 Prices", callback_data="admin_prices")],
         [InlineKeyboardButton("🏷 Labels", callback_data="admin_labels"), InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast")],
-        [InlineKeyboardButton("📦 Deliveries", callback_data="admin_deliveries"), InlineKeyboardButton("💳 Payments", callback_data="admin_payments")],
-        [InlineKeyboardButton("❌ Close", callback_data="admin_close")]
+        [InlineKeyboardButton("💬 Edit Welcome", callback_data="admin_edit_welcome"), InlineKeyboardButton("❓ Edit FAQ", callback_data="admin_edit_faq")],
+        [InlineKeyboardButton("📦 Deliveries", callback_data="admin_deliveries"), InlineKeyboardButton("❌ Close", callback_data="admin_close")]
     ])
 
 async def admin_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -418,7 +423,6 @@ async def admin_add_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin_authenticated(user_id):
         await update.message.reply_text("❌ Please login via /admin first.")
         return
-    
     try:
         target_user = int(context.args[0])
         amount = float(context.args[1])
@@ -435,7 +439,6 @@ async def admin_set_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin_authenticated(user_id):
         await update.message.reply_text("❌ Please login via /admin first.")
         return
-    
     try:
         target_user = int(context.args[0])
         amount = float(context.args[1])
@@ -446,17 +449,13 @@ async def admin_set_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except (IndexError, ValueError):
         await update.message.reply_text("⚠️ <b>Format:</b> <code>/setbalance USER_ID AMOUNT</code>", parse_mode="HTML")
 
-# --- Admin Reply Command (For Tickets & User Messages) ---
+# --- Admin Reply Command ---
 async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     is_admin = is_admin_authenticated(user_id) or str(update.effective_chat.id) == str(LOG_GROUP_ID)
-    
-    if not is_admin:
-        return
-        
+    if not is_admin: return
     raw_text = update.message.text or update.message.caption
-    if not raw_text: 
-        return
+    if not raw_text: return
         
     parts = raw_text.split(maxsplit=2)
     if len(parts) < 2:
@@ -475,7 +474,6 @@ async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             await context.bot.send_message(chat_id=target_user, text=f"👨‍💻 <b>Admin Reply:</b>\n\n{msg_text}", parse_mode="HTML")
         
-        # Auto-Close open tickets for this user
         tickets = load_tickets()
         for t in tickets:
             if str(t.get("user_id")) == str(target_user) and t.get("status") == "open":
@@ -505,7 +503,6 @@ async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_
                 await update.message.reply_text("❌ Invalid amount. Please enter numbers only (e.g., 50 or 50.50).")
             return
 
-        # Ticket System: Step 1 (Description)
         elif state == "TICKET_STEP_1" and update.message.text:
             desc = update.message.text
             user_states[user_id] = {"state": "TICKET_STEP_2", "desc": desc}
@@ -514,7 +511,7 @@ async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_
             for m in methods:
                 keyboard.append([InlineKeyboardButton(m['title'], callback_data=f"ticket_method_{m['id']}")])
             keyboard.append([InlineKeyboardButton("Other / None", callback_data="ticket_method_other")])
-            keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="support_menu")])
+            keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="help_menu")])
             
             await update.message.reply_text("🐛 <b>Report Issue</b>\n\nStep 2 of 3 — Select Method\n\nWhich method is this issue regarding?", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
             return
@@ -523,7 +520,19 @@ async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_
         state_data = admin_states.pop(user_id)
         state = state_data.get("state")
         
-        if state == "WAITING_NEW_STOCK" and update.message.text:
+        if state == "WAITING_WELCOME" and update.message.text:
+            config = load_config()
+            config["welcome"] = update.message.text_html if hasattr(update.message, 'text_html') and update.message.text_html else update.message.text
+            save_config(config)
+            await update.message.reply_text("✅ Welcome message updated successfully!", reply_markup=get_admin_keyboard())
+
+        elif state == "WAITING_FAQ" and update.message.text:
+            config = load_config()
+            config["faq"] = update.message.text_html if hasattr(update.message, 'text_html') and update.message.text_html else update.message.text
+            save_config(config)
+            await update.message.reply_text("✅ FAQ message updated successfully!", reply_markup=get_admin_keyboard())
+
+        elif state == "WAITING_NEW_STOCK" and update.message.text:
             lines = update.message.text.strip().split('\n')
             methods = load_methods()
             added_count = 0
@@ -565,10 +574,8 @@ async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_
         elif state == "WAITING_DESC" and update.message.text:
             methods = load_methods()
             new_desc = update.message.text_html if hasattr(update.message, 'text_html') and update.message.text_html else update.message.text
-            
             for m in methods:
-                if str(m['id']) == str(state_data["method_id"]): 
-                    m['desc'] = new_desc
+                if str(m['id']) == str(state_data["method_id"]): m['desc'] = new_desc
             save_methods(methods)
             await update.message.reply_text("✅ Description updated successfully!", reply_markup=get_admin_keyboard())
             
@@ -630,7 +637,6 @@ async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_
         user_state = user_states.get(user_id, {})
         state = user_state.get("state")
         
-        # 1. TICKET SCREENSHOT
         if state == "TICKET_STEP_3":
             del user_states[user_id]
             desc = user_state.get("desc", "No description")
@@ -656,7 +662,6 @@ async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_
             await update.message.reply_text("✅ <b>Ticket submitted successfully!</b>\nOur support team will review your screenshot and get back to you shortly.", parse_mode="HTML")
             return
 
-        # 2. PAYMENT SCREENSHOT
         amount_expected = user_state.get("amount", "Unknown") if state == "WAITING_FOR_SCREENSHOT" else "Unknown"
         if user_id in user_states: del user_states[user_id]
         await log_action(context, user, "Uploaded a payment screenshot")
@@ -692,7 +697,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_user(user)
     data = query.data
 
-    # Log Group Admin Actions
     if data.startswith("approve_"):
         parts = data.split("_")
         target_user = parts[1]
@@ -737,7 +741,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer()
             await query.edit_message_text("🛠 <b>Admin Panel</b>\n\nChoose a section:", reply_markup=get_admin_keyboard(), parse_mode="HTML")
 
-        # --- STATS DASHBOARD ---
+        elif data == "admin_edit_welcome":
+            admin_states[user_id] = {"state": "WAITING_WELCOME"}
+            await query.answer()
+            await query.edit_message_text("💬 <b>Edit Welcome Message</b>\n\nSend the new welcome text.\n\nYou can use these placeholders:\n<code>{username}</code> - User's name\n<code>{user_id}</code> - User's ID\n<code>{STORE_NAME}</code> - Store Name", parse_mode="HTML")
+
+        elif data == "admin_edit_faq":
+            admin_states[user_id] = {"state": "WAITING_FAQ"}
+            await query.answer()
+            await query.edit_message_text("❓ <b>Edit FAQ Message</b>\n\nSend the new FAQ text. You can use HTML formatting.", parse_mode="HTML")
+
         elif data == "admin_stats":
             await query.answer()
             users_count = len(load_users())
@@ -766,7 +779,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard = [[InlineKeyboardButton("⬅️ Admin Menu", callback_data="admin_home")]]
             await query.edit_message_text(stats_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
-        # --- USERS LIST & AUTO-FETCH LEGACY ---
         elif data == "admin_users":
             await query.answer()
             raw_users = load_users()
@@ -893,8 +905,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard = [
                 [InlineKeyboardButton(f"✏️ 📦 {labels.get('method', 'Method')}", callback_data="editlabel_method")],
                 [InlineKeyboardButton(f"✏️ 💷 {labels.get('wallet', 'Wallet')}", callback_data="editlabel_wallet")],
-                [InlineKeyboardButton(f"✏️ 🛡️ {labels.get('rules', 'Rules')}", callback_data="editlabel_rules")],
-                [InlineKeyboardButton(f"✏️ ☎️ {labels.get('support', 'Support')}", callback_data="editlabel_support")],
+                [InlineKeyboardButton(f"✏️ 🛡️ {labels.get('faq', 'FAQ')}", callback_data="editlabel_faq")],
+                [InlineKeyboardButton(f"✏️ ☎️ {labels.get('help', 'Help')}", callback_data="editlabel_help")],
                 [InlineKeyboardButton(f"✏️ 📄 {labels.get('channel', 'Channel')}", callback_data="editlabel_channel")]
             ]
             for m in methods:
@@ -966,10 +978,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try: await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
             except Exception: pass
 
-    # --- SUPPORT MENU SYSTEM ---
-    elif data == "support_menu":
+    elif data == "help_menu":
         await query.answer()
-        await send_support_menu(query, context)
+        await send_help_menu(query, context)
 
     elif data == "my_tickets":
         await query.answer()
@@ -983,14 +994,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for t in user_tickets:
                 text += f"🎫 <b>Ticket #{t['ticket_id']}</b>\n📦 Method: {t['method']}\n📝 Desc: {t['desc']}\n📅 Date: {t['date']}\n⏳ Status: Pending Admin Reply\n\n"
                 
-        keyboard = [[InlineKeyboardButton("⬅️ Back", callback_data="support_menu")]]
+        keyboard = [[InlineKeyboardButton("⬅️ Back", callback_data="help_menu")]]
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
     elif data == "report_issue":
         user_states[user_id] = {"state": "TICKET_STEP_1"}
         await query.answer()
         text = "🐛 <b>Report Issue</b>\n\nStep 1 of 3 — What Happened\n\nDescribe the issue you experienced.\n\nType your description and send it:"
-        keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="support_menu")]]
+        keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="help_menu")]]
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
     elif data.startswith("ticket_method_"):
@@ -1007,7 +1018,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = "🐛 <b>Report Issue</b>\n\nStep 3 of 3 — Upload Screenshot\n\nPlease upload a screenshot or photo of the issue.\n\n<i>If you don't have a screenshot, click Skip.</i>"
         keyboard = [
             [InlineKeyboardButton("⏭ Skip", callback_data="ticket_skip_photo")],
-            [InlineKeyboardButton("❌ Cancel", callback_data="support_menu")]
+            [InlineKeyboardButton("❌ Cancel", callback_data="help_menu")]
         ]
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
@@ -1036,8 +1047,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await query.edit_message_text("✅ <b>Ticket submitted successfully!</b>\nOur support team will review your report and get back to you shortly.", parse_mode="HTML")
 
-
-    # --- WALLET / TOPUP / BUY FLOWS ---
     elif data == "wallet":
         await log_action(context, user, "Opened their Wallet")
         await query.answer()
@@ -1098,10 +1107,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="wallet")]]
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
-    elif data == "rules_main" or data == "rules_store":
+    elif data == "faq_main" or data == "faq_store":
         await query.answer()
-        back_data = "main_menu" if data == "rules_main" else "access_store"
-        await query.edit_message_text(f"🛡️ <b>Rules</b>\n\n{RULES_TEXT}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data=back_data)]]), parse_mode="HTML")
+        back_data = "main_menu" if data == "faq_main" else "access_store"
+        faq_text = load_config().get("faq", DEFAULT_CONFIG["faq"])
+        await query.edit_message_text(f"🛡️ <b>FAQ</b>\n\n{faq_text}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data=back_data)]]), parse_mode="HTML")
 
     elif data == "method":
         await query.answer()
@@ -1196,8 +1206,8 @@ async def post_init(application: Application):
         BotCommand("start", "🏠 Main menu"),
         BotCommand("skippers", "📦 Browse skippers"),
         BotCommand("wallet", "💵 View wallet & top up"),
-        BotCommand("rules", "🛡 Read the rules"),
-        BotCommand("support", "☎️ Contact support")
+        BotCommand("faq", "🛡 Frequently asked questions by newbies"),
+        BotCommand("help", "☎️ Get professional assistance and support")
     ])
 
 def main():
@@ -1215,8 +1225,8 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("skippers", skippers_command))
     app.add_handler(CommandHandler("wallet", wallet_command))
-    app.add_handler(CommandHandler("rules", rules_command))
-    app.add_handler(CommandHandler("support", support_command))
+    app.add_handler(CommandHandler("faq", faq_command))
+    app.add_handler(CommandHandler("help", help_command))
     
     app.add_handler(CommandHandler("addbalance", admin_add_balance))
     app.add_handler(CommandHandler("setbalance", admin_set_balance))
