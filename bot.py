@@ -56,6 +56,7 @@ LABELS_FILE = os.path.join(DATA_DIR, "labels.json")
 CARTS_FILE = os.path.join(DATA_DIR, "carts.json")
 BALANCES_FILE = os.path.join(DATA_DIR, "balances.json")
 SALES_FILE = os.path.join(DATA_DIR, "sales.json")
+TICKETS_FILE = os.path.join(DATA_DIR, "tickets.json")
 
 DEFAULT_METHODS = [
     {"id": "1", "title": "Amazon.com", "desc": "BIN + METH", "price": "75"},
@@ -178,6 +179,9 @@ def save_carts(data): save_json(CARTS_FILE, data)
 def load_sales(): return load_json(SALES_FILE, [])
 def save_sales(data): save_json(SALES_FILE, data)
 
+def load_tickets(): return load_json(TICKETS_FILE, [])
+def save_tickets(data): save_json(TICKETS_FILE, data)
+
 # --- Balance Management ---
 def load_balances(): return load_json(BALANCES_FILE, {})
 def save_balances(data): save_json(BALANCES_FILE, data)
@@ -255,7 +259,7 @@ async def send_store_menu(query_or_message, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton(f"📦 {labels.get('method', 'Method')}", callback_data="method")],
         [
             InlineKeyboardButton(f"💷 {labels.get('wallet', 'Wallet')}", callback_data="wallet"),
-            InlineKeyboardButton(f"☎️ {labels.get('support', 'Support')} ↗️", url=make_safe_url(SUPPORT_LINK))
+            InlineKeyboardButton(f"☎️ {labels.get('support', 'Support')}", callback_data="support_menu")
         ],
         [
             InlineKeyboardButton(f"🛡️ {labels.get('rules', 'Rules')}", callback_data="rules_store"),
@@ -319,6 +323,19 @@ async def send_payment_methods(query_or_message, amount: str):
     else:
         await query_or_message.reply_text(text, reply_markup=markup, parse_mode="HTML")
 
+async def send_support_menu(query_or_message, context: ContextTypes.DEFAULT_TYPE):
+    text = "🪪 <b>Support</b>\n\nHow can we help you today?\n\n• Report an issue with the bot\n• View the status of your existing tickets"
+    keyboard = [
+        [InlineKeyboardButton("🐛 Report Issue", callback_data="report_issue")],
+        [InlineKeyboardButton("📋 My Tickets", callback_data="my_tickets")],
+        [InlineKeyboardButton("⬅️ Back", callback_data="main_menu")]
+    ]
+    markup = InlineKeyboardMarkup(keyboard)
+    if hasattr(query_or_message, 'edit_message_text'):
+        await query_or_message.edit_message_text(text, reply_markup=markup, parse_mode="HTML")
+    else:
+        await query_or_message.reply_text(text, reply_markup=markup, parse_mode="HTML")
+
 # --- Native Bot Menu Commands ---
 async def skippers_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -348,9 +365,13 @@ async def rules_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("You must join the channel first. Send /start to begin.")
 
 async def support_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
     save_user(update.effective_user)
     await log_action(context, update.effective_user, "Used /support command")
-    await update.message.reply_text(f"☎️ <b>Contact Support:</b>\n{make_safe_url(SUPPORT_LINK)}", parse_mode="HTML")
+    if await check_membership(user_id, context):
+        await send_support_menu(update.message, context)
+    else:
+        await update.message.reply_text("You must join the channel first. Send /start to begin.")
 
 # --- Admin Panel ---
 def get_admin_keyboard():
@@ -425,6 +446,46 @@ async def admin_set_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except (IndexError, ValueError):
         await update.message.reply_text("⚠️ <b>Format:</b> <code>/setbalance USER_ID AMOUNT</code>", parse_mode="HTML")
 
+# --- Admin Reply Command (For Tickets & User Messages) ---
+async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    is_admin = is_admin_authenticated(user_id) or str(update.effective_chat.id) == str(LOG_GROUP_ID)
+    
+    if not is_admin:
+        return
+        
+    raw_text = update.message.text or update.message.caption
+    if not raw_text: 
+        return
+        
+    parts = raw_text.split(maxsplit=2)
+    if len(parts) < 2:
+        await update.message.reply_text("⚠️ Format: /reply USER_ID message")
+        return
+        
+    target_user = parts[1]
+    msg_text = parts[2] if len(parts) > 2 else ""
+    
+    try:
+        if update.message.photo:
+            await context.bot.send_photo(chat_id=target_user, photo=update.message.photo[-1].file_id, caption=f"👨‍💻 <b>Admin Reply:</b>\n\n{msg_text}", parse_mode="HTML")
+        else:
+            if not msg_text:
+                await update.message.reply_text("⚠️ You must provide a message to reply with.")
+                return
+            await context.bot.send_message(chat_id=target_user, text=f"👨‍💻 <b>Admin Reply:</b>\n\n{msg_text}", parse_mode="HTML")
+        
+        # Auto-Close open tickets for this user
+        tickets = load_tickets()
+        for t in tickets:
+            if str(t.get("user_id")) == str(target_user) and t.get("status") == "open":
+                t["status"] = "closed"
+        save_tickets(tickets)
+        
+        await update.message.reply_text(f"✅ Reply sent successfully to user {target_user}. Their open tickets have been closed.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Failed to send reply: {e}")
+
 # --- Text Message Handler ---
 async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -433,6 +494,7 @@ async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_
     
     if user_id in user_states:
         state = user_states.get(user_id).get("state")
+        
         if state == "WAITING_CUSTOM_AMOUNT" and update.message.text:
             del user_states[user_id]
             amount = update.message.text.strip().replace('£', '')
@@ -441,6 +503,20 @@ async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_
                 await send_payment_methods(update.message, amount)
             else:
                 await update.message.reply_text("❌ Invalid amount. Please enter numbers only (e.g., 50 or 50.50).")
+            return
+
+        # Ticket System: Step 1 (Description)
+        elif state == "TICKET_STEP_1" and update.message.text:
+            desc = update.message.text
+            user_states[user_id] = {"state": "TICKET_STEP_2", "desc": desc}
+            methods = load_methods()
+            keyboard = []
+            for m in methods:
+                keyboard.append([InlineKeyboardButton(m['title'], callback_data=f"ticket_method_{m['id']}")])
+            keyboard.append([InlineKeyboardButton("Other / None", callback_data="ticket_method_other")])
+            keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="support_menu")])
+            
+            await update.message.reply_text("🐛 <b>Report Issue</b>\n\nStep 2 of 3 — Select Method\n\nWhich method is this issue regarding?", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
             return
 
     if user_id in admin_states:
@@ -488,7 +564,6 @@ async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_
 
         elif state == "WAITING_DESC" and update.message.text:
             methods = load_methods()
-            # Capture the exact HTML formatting created by the admin in Telegram
             new_desc = update.message.text_html if hasattr(update.message, 'text_html') and update.message.text_html else update.message.text
             
             for m in methods:
@@ -550,13 +625,40 @@ async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_
                 await update.message.reply_text(f"❌ Failed to send delivery to user.\nError: {e}", reply_markup=get_admin_keyboard())
         return
 
+    # Handle User Photo Uploads (Payments or Ticket Screenshots)
     if update.message.photo:
         user_state = user_states.get(user_id, {})
-        amount_expected = user_state.get("amount", "Unknown") if user_state.get("state") == "WAITING_FOR_SCREENSHOT" else "Unknown"
+        state = user_state.get("state")
         
-        if user_id in user_states:
+        # 1. TICKET SCREENSHOT
+        if state == "TICKET_STEP_3":
             del user_states[user_id]
+            desc = user_state.get("desc", "No description")
+            method = user_state.get("method", "Other")
             
+            ticket_id = str(uuid.uuid4().hex)[:8]
+            tickets = load_tickets()
+            tickets.append({
+                "ticket_id": ticket_id, "user_id": user_id, "desc": desc, 
+                "method": method, "status": "open", "date": datetime.now().strftime("%d/%m %H:%M")
+            })
+            save_tickets(tickets)
+            
+            await log_action(context, user, f"Submitted support ticket #{ticket_id}")
+            
+            if LOG_GROUP_ID:
+                username_str = f"@{user.username}" if user.username else user.first_name
+                caption = f"🎫 <b>NEW SUPPORT TICKET</b>\n👤 User: {username_str} (ID: <code>{user.id}</code>)\n📦 Method: {method}\n📝 Description: {desc}\n\n💡 TO REPLY, COPY AND PASTE THIS COMMAND:\n<code>/reply {user.id} type your message here</code>"
+                try:
+                    await context.bot.send_photo(chat_id=LOG_GROUP_ID, photo=update.message.photo[-1].file_id, caption=caption, parse_mode="HTML")
+                except Exception: pass
+            
+            await update.message.reply_text("✅ <b>Ticket submitted successfully!</b>\nOur support team will review your screenshot and get back to you shortly.", parse_mode="HTML")
+            return
+
+        # 2. PAYMENT SCREENSHOT
+        amount_expected = user_state.get("amount", "Unknown") if state == "WAITING_FOR_SCREENSHOT" else "Unknown"
+        if user_id in user_states: del user_states[user_id]
         await log_action(context, user, "Uploaded a payment screenshot")
         
         if LOG_GROUP_ID:
@@ -571,26 +673,16 @@ async def handle_general_messages(update: Update, context: ContextTypes.DEFAULT_
                 f"💰 Expected Amount: £{amount_expected}\n\n"
                 f"⚠️ Action required: Verify and Accept/Reject."
             )
-            
             keyboard = [
                 [InlineKeyboardButton(f"✅ Approve £{amount_expected}", callback_data=f"approve_{user.id}_{amount_expected}")],
                 [InlineKeyboardButton("❌ Reject Payment", callback_data=f"reject_{user.id}")]
             ]
-            
             try:
-                await context.bot.send_photo(
-                    chat_id=LOG_GROUP_ID,
-                    photo=photo_file,
-                    caption=caption,
-                    reply_markup=InlineKeyboardMarkup(keyboard)
-                )
+                await context.bot.send_photo(chat_id=LOG_GROUP_ID, photo=photo_file, caption=caption, reply_markup=InlineKeyboardMarkup(keyboard))
             except Exception as e:
                 logging.error(f"Failed to forward screenshot to LOG_GROUP_ID: {e}")
 
-        await update.message.reply_text(
-            "✅ <b>Screenshot received!</b>\n\nOur admins will verify your transaction shortly. Once confirmed, your wallet balance will be updated.",
-            parse_mode="HTML"
-        )
+        await update.message.reply_text("✅ <b>Screenshot received!</b>\n\nOur admins will verify your transaction shortly. Once confirmed, your wallet balance will be updated.", parse_mode="HTML")
 
 # --- Main Callback Handler ---
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -874,6 +966,78 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try: await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
             except Exception: pass
 
+    # --- SUPPORT MENU SYSTEM ---
+    elif data == "support_menu":
+        await query.answer()
+        await send_support_menu(query, context)
+
+    elif data == "my_tickets":
+        await query.answer()
+        tickets = load_tickets()
+        user_tickets = [t for t in tickets if str(t.get("user_id")) == str(user_id) and t.get("status") == "open"]
+        
+        if not user_tickets:
+            text = "📋 <b>My Tickets</b>\n\nYou currently have no open tickets."
+        else:
+            text = f"📋 <b>My Tickets ({len(user_tickets)} open)</b>\n\n"
+            for t in user_tickets:
+                text += f"🎫 <b>Ticket #{t['ticket_id']}</b>\n📦 Method: {t['method']}\n📝 Desc: {t['desc']}\n📅 Date: {t['date']}\n⏳ Status: Pending Admin Reply\n\n"
+                
+        keyboard = [[InlineKeyboardButton("⬅️ Back", callback_data="support_menu")]]
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+
+    elif data == "report_issue":
+        user_states[user_id] = {"state": "TICKET_STEP_1"}
+        await query.answer()
+        text = "🐛 <b>Report Issue</b>\n\nStep 1 of 3 — What Happened\n\nDescribe the issue you experienced.\n\nType your description and send it:"
+        keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="support_menu")]]
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+
+    elif data.startswith("ticket_method_"):
+        method_id = data.replace("ticket_method_", "")
+        method_name = "Other"
+        if method_id != "other":
+            method = next((m for m in load_methods() if str(m['id']) == method_id), None)
+            if method: method_name = method['title']
+            
+        desc = user_states.get(user_id, {}).get("desc", "No description provided")
+        user_states[user_id] = {"state": "TICKET_STEP_3", "desc": desc, "method": method_name}
+        
+        await query.answer()
+        text = "🐛 <b>Report Issue</b>\n\nStep 3 of 3 — Upload Screenshot\n\nPlease upload a screenshot or photo of the issue.\n\n<i>If you don't have a screenshot, click Skip.</i>"
+        keyboard = [
+            [InlineKeyboardButton("⏭ Skip", callback_data="ticket_skip_photo")],
+            [InlineKeyboardButton("❌ Cancel", callback_data="support_menu")]
+        ]
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+
+    elif data == "ticket_skip_photo":
+        await query.answer()
+        state_data = user_states.pop(user_id, {})
+        desc = state_data.get("desc", "No description")
+        method = state_data.get("method", "Other")
+        
+        ticket_id = str(uuid.uuid4().hex)[:8]
+        tickets = load_tickets()
+        tickets.append({
+            "ticket_id": ticket_id, "user_id": user_id, "desc": desc, 
+            "method": method, "status": "open", "date": datetime.now().strftime("%d/%m/%Y %H:%M")
+        })
+        save_tickets(tickets)
+        
+        await log_action(context, user, f"Submitted support ticket #{ticket_id}")
+        
+        if LOG_GROUP_ID:
+            username_str = f"@{user.username}" if user.username else user.first_name
+            msg = f"🎫 <b>NEW SUPPORT TICKET</b>\n👤 User: {username_str} (ID: <code>{user.id}</code>)\n📦 Method: {method}\n📝 Description: {desc}\n\n💡 TO REPLY, COPY AND PASTE THIS COMMAND:\n<code>/reply {user.id} type your message here</code>"
+            try:
+                await context.bot.send_message(chat_id=LOG_GROUP_ID, text=msg, parse_mode="HTML")
+            except Exception: pass
+        
+        await query.edit_message_text("✅ <b>Ticket submitted successfully!</b>\nOur support team will review your report and get back to you shortly.", parse_mode="HTML")
+
+
+    # --- WALLET / TOPUP / BUY FLOWS ---
     elif data == "wallet":
         await log_action(context, user, "Opened their Wallet")
         await query.answer()
@@ -950,7 +1114,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         method = next((m for m in load_methods() if str(m['id']) == str(method_id)), None)
         if method:
             safe_title = safe_html(method['title'])
-            desc = method.get('desc', '') # Allow raw description formatting
+            desc = method.get('desc', '') 
             
             await log_action(context, user, f"Viewed details for '{method['title']}'")
             text = f"📚 <b>{safe_title}</b>\n{desc}\n\n<b>Price:</b> £{method['price']}\n---------------------------------"
@@ -1056,6 +1220,7 @@ def main():
     
     app.add_handler(CommandHandler("addbalance", admin_add_balance))
     app.add_handler(CommandHandler("setbalance", admin_set_balance))
+    app.add_handler(CommandHandler("reply", admin_reply))
     
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_general_messages))
     app.add_handler(CallbackQueryHandler(handle_callback))
